@@ -5,11 +5,12 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import uuid
 
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData,
+    TypeSettingsData, Dependency, LinkReport,
 )
 from . import storage
 
@@ -45,7 +46,8 @@ def _build_settings(value):
     else:
         if any(getattr(value, k) is INHERIT for k in ("configuration", "architecture", "cpp_standard")):
             raise SettingsError("Solution has no parent to inherit from")
-        _strings(value.build_projects)
+        if value.build_projects is not None:
+            _strings(value.build_projects)
         _strings(value.run_projects)
 
 
@@ -78,6 +80,18 @@ class ProjectSettings(_Settings):
             if not isinstance(kind, ProjectType) or not isinstance(data, TypeSettingsData):
                 raise SettingsError("Expected ProjectType -> TypeSettingsData")
             _strings(data.compile_definitions)
+            _strings(data.public_definitions)
+            _strings(data.include_directories)
+            for directory in data.include_directories:
+                storage.contained(self.owner.root, directory)
+        if not isinstance(values.dependencies, dict):
+            raise SettingsError("dependencies must be a mapping")
+        for key, dependency in values.dependencies.items():
+            if not isinstance(key, str) or not key or not isinstance(dependency, Dependency):
+                raise SettingsError("Expected dependency id -> Dependency")
+            _name(dependency.project)
+            if dependency.project_type not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.HEADER_ONLY}:
+                raise SettingsError("Only library types can be linked")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
@@ -86,7 +100,8 @@ class ProjectSettings(_Settings):
 
     def _read(self):
         raw = storage.manifest(self.path, "project")
-        storage.object_fields(raw, {"name", "source_directories", "types"})
+        raw.setdefault("dependencies", {})
+        storage.object_fields(raw, {"name", "source_directories", "types", "dependencies"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
         types, revisions = {}, {self.path: storage.digest(self.path)}
@@ -97,10 +112,21 @@ class ProjectSettings(_Settings):
                 raise SettingsError(f"Unsupported project type: {key}") from exc
             path = storage.contained(self.path.parent / "types", relative)
             data = storage.manifest(path, key)
-            storage.object_fields(data, {"compile_definitions"})
+            data.setdefault("public_definitions", [])
+            data.setdefault("include_directories", ["include"])
+            storage.object_fields(data, {"compile_definitions", "public_definitions", "include_directories"})
             types[kind] = TypeSettingsData(**data)
             revisions[path] = storage.digest(path)
-        values = ProjectSettingsData(raw["name"], types, raw["source_directories"])
+        dependencies = {}
+        if not isinstance(raw["dependencies"], dict):
+            raise SettingsError("dependencies must be a mapping")
+        for key, data in raw["dependencies"].items():
+            storage.object_fields(data, {"project", "project_type"})
+            try:
+                dependencies[key] = Dependency(data["project"], ProjectType(data["project_type"]))
+            except (ValueError, TypeError) as exc:
+                raise SettingsError("Invalid dependency type") from exc
+        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies)
         self._validate(values)
         return values, revisions
 
@@ -126,11 +152,33 @@ class ProjectSettings(_Settings):
             storage.atomic_write(path, content)
             refs[kind.value] = filename
             paths.append(path)
-        payload = {"name": values.name, "source_directories": values.source_directories, "types": refs}
+        payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
+                   "dependencies": {key: asdict(value) for key, value in values.dependencies.items()}}
         storage.atomic_write(self.path, storage.encoded(storage.envelope("project", payload)))
         self._data = values
         self._revision = {p: storage.digest(p) for p in [self.path, *paths]}
         return ChangeReport(tuple(str(p) for p in [self.path, *paths]))
+
+    def link_project(self, other_project, link_type):
+        self.owner._check_active()
+        other_project._check_active()
+        if other_project.solution is not self.owner.solution:
+            raise SettingsError("Use link_solution for external Solutions")
+        if not isinstance(link_type, ProjectType) or link_type not in other_project.settings.get().types:
+            raise SettingsError("Dependency does not support the requested type")
+        values = self.get()
+        dependency = Dependency(other_project.name, link_type)
+        if dependency in values.dependencies.values():
+            raise SettingsError("Dependency is already registered")
+        dependency_id = uuid.uuid4().hex
+        values.dependencies[dependency_id] = dependency
+        self.save(values)
+        return LinkReport(dependency_id, other_project.name, link_type)
+
+    def unlink(self, dependency_id):
+        values = self.get()
+        del values.dependencies[dependency_id]
+        return self.save(values)
 
 
 class SolutionSettings(_Settings):
@@ -215,9 +263,11 @@ class Project:
         _build_settings(values)
         self._build_settings = deepcopy(values)
 
-    def _resolved_build_settings(self):
+    def _resolved_build_settings(self, requested_type=None):
         self._check_active()
         values = deepcopy(self._build_settings)
+        if requested_type is not None:
+            values.project_type = requested_type
         for key in ("configuration", "architecture", "cpp_standard"):
             if getattr(values, key) is INHERIT:
                 setattr(values, key, getattr(self.solution._build_settings, key))
@@ -290,6 +340,27 @@ class Solution:
         self._projects = {}
         self.settings = SolutionSettings(self)
         self._build_settings = SolutionBuildSettings()
+        self._last_update = None
+
+    def update(self):
+        from .solution_engine import update
+        return update(self)
+
+    def build(self):
+        from .solution_engine import operate
+        return operate(self, "build")
+
+    def clean(self):
+        from .solution_engine import operate
+        return operate(self, "clean")
+
+    def rebuild(self):
+        from .solution_engine import operate
+        return operate(self, "rebuild")
+
+    def run(self):
+        from .solution_engine import operate
+        return operate(self, "run")
 
     def _check_active(self):
         pass
@@ -356,6 +427,10 @@ class Solution:
         values = self.settings.get()
         if name == values.main_project:
             raise SettingsError("Change main_project before removing it")
+        for project in self.projects():
+            project.settings.reload()
+            if any(d.project == name for d in project.settings._data.dependencies.values()):
+                raise SettingsError("Unlink references before removing this Project")
         del values.projects[name]
         with storage.write_lock(self.settings.path.parent):
             self.settings._assert_unchanged()
@@ -367,7 +442,7 @@ class Solution:
         if not isinstance(values, SolutionBuildSettings):
             raise SettingsError("Expected SolutionBuildSettings")
         _build_settings(values)
-        for name in [*values.build_projects, *values.run_projects]:
+        for name in [*(values.build_projects or []), *values.run_projects]:
             if name not in self._projects:
                 raise SettingsError(f"Unknown Project: {name}")
         self._build_settings = deepcopy(values)

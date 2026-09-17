@@ -55,5 +55,24 @@ M3aでは独立.vcxproj統合候補の検証コードを実装した。
 手順・判断点・限界は[全体統合の判断資料](INTEGRATION_DECISION.md)を参照。
 修正後の最終確認は同じ実VS2022有効化コマンドで全26件成功（実VS2022試験4件を含む、23.374秒）。
 
-M3bは成果物共用／分離の重要な未合意判断に到達したため未着手。
-M3全体とM4〜M6は未完了。全体統合・共有依存clean・GoogleTest・外部依存・テンプレート・イベントを製品実装済みと扱わない。
+## M3b：内部依存と全体統合
+
+最新合意に基づきProject別所有・全体／個別共用を実装。`graph.py`で依存を検証し、`solution_engine.py`で
+独立生成.vcxprojを全体.slnへ登録する。全体CMakeのcustom targetから、CMakeが検出したMSBuildで
+全体.slnの選択targetをビルドする。個別buildは依存順に各所有ツリーを処理する。
+
+- link_projectはIDを返して保存、unlinkは再open後も可能。参照中Projectの登録解除を拒否する。
+- 依存をIMPORTEDライブラリとして登録し、成果物は依存先のFile APIで解決。PUBLIC include・マクロ・推移的リンクを伝える。
+- 個別updateは自分だけ走査・生成する。依存の生成情報が未取得なら「先に依存をupdate/build」を診断する。個別buildと全体update/buildは依存を先に準備する。
+- 全体buildの既定選択は全所属（None）。明示空一覧はビルドなし。runの既定選択は空一覧。全体.slnの表示は全所属。
+- 現段階の全体操作はconfiguration・architectureが一致する構成を対象とする。子の明示値は上書きせず、不一致をプロセス起動前に診断する。
+- 個別cleanは自分の専有ツリーだけを対象にする。IMPORTED依存の成果物は削除しない。全体cleanは明示選択だけを対象とし、非選択Projectに必要な依存先を保護する。
+- 構成変更・所属変更時は全体update/buildで全体.slnを再生成する。通常の個別ソース変更では全体.slnを再生成しない。
+- APIでの選択ビルドを検証。IDEの既定ビルド参加は全所属のままであり、API側の選択との完全同期は保留。
+
+検証：App→MathとToolによる公開API経由の全体／個別build/run、個別更新、Debug/Release、選択clean、
+共有依存保護、unlink後の実ビルドを確認。自動テストは循環・不一致・非対応種類・登録解除制限も含む。
+自己レビューでEXCLUDE_FROM_ALLが.slnの明示target処理を妨げる問題を修正し、対象選択はMSBuildの/tに限定した。
+修正後の全32件成功（実VS2022試験5件、32.766秒）。M3bのACを確認した。
+
+M4〜M6は未完了。外部依存・PCH・GoogleTest・テンプレート・イベントは後続。

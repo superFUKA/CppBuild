@@ -21,6 +21,21 @@ INHERIT = Inheritance.INHERIT
 @dataclass
 class TypeSettingsData:
     compile_definitions: list[str] = field(default_factory=list)
+    public_definitions: list[str] = field(default_factory=list)
+    include_directories: list[str] = field(default_factory=lambda: ["include"])
+
+
+@dataclass
+class Dependency:
+    project: str
+    project_type: ProjectType
+
+
+@dataclass(frozen=True)
+class LinkReport:
+    dependency_id: str
+    target: str
+    project_type: ProjectType
 
 
 @dataclass
@@ -28,6 +43,7 @@ class ProjectSettingsData:
     name: str
     types: dict[ProjectType, TypeSettingsData]
     source_directories: list[str] = field(default_factory=lambda: ["src", "include"])
+    dependencies: dict[str, Dependency] = field(default_factory=dict)
 
 
 @dataclass
@@ -52,7 +68,7 @@ class SolutionBuildSettings:
     configuration: str = "Debug"
     architecture: str = "x64"
     cpp_standard: int = 20
-    build_projects: list[str] = field(default_factory=list)
+    build_projects: list[str] | None = None
     run_projects: list[str] = field(default_factory=list)
 
 
