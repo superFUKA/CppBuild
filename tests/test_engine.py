@@ -1,0 +1,95 @@
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from cppbuild import ProjectBuildSettings, ProjectType as T, SettingsError, Solution
+from cppbuild.engine import ProcessReport, _quote, _scan
+
+
+class EngineUnitTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.solution = Solution.create(Path(temporary.name) / "Demo", "Demo")
+        self.app = self.solution.add_project("App", "App", T.EXECUTABLE)
+
+    def test_deferred_empty_content_and_protected_paths(self):
+        result = self.app.add_file("src/empty.hpp", content="", auto_update=False)
+        self.assertTrue(result.success)
+        self.assertTrue(result.pending_update)
+        self.assertEqual(result.changed_paths[0].read_bytes(), b"")
+        with self.assertRaises(FileExistsError):
+            self.app.add_file("src/empty.hpp", content="overwrite", auto_update=False)
+        for path in ("../outside.cpp", ".cppbuild/project.json", "build/output"):
+            with self.subTest(path=path), self.assertRaises(SettingsError):
+                self.app.add_file(path, content="", auto_update=False)
+        with self.assertRaises(FileNotFoundError):
+            self.app.remove_file("src", auto_update=False)
+
+    def test_update_exception_retains_completed_file_change(self):
+        with patch("cppbuild.engine.update", side_effect=FileNotFoundError("cmake")):
+            report = self.app.add_file("src/main.cpp", content="int main() {}")
+        self.assertFalse(report.success)
+        self.assertTrue(report.pending_update)
+        self.assertTrue(report.changed_paths[0].exists())
+        self.assertIn("FileNotFoundError", report.update_error)
+
+    def test_failed_configure_does_not_build(self):
+        self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
+        with patch("cppbuild.engine.process", return_value=ProcessReport(("cmake",), 1, "failed")) as call:
+            result = self.app.build()
+        self.assertFalse(result.success)
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(result.artifacts, ())
+
+    def test_no_sources_fails_before_process(self):
+        with patch("cppbuild.engine.process") as call:
+            with self.assertRaises(SettingsError):
+                self.app.update()
+        call.assert_not_called()
+
+    def test_scan_excludes_metadata_and_build(self):
+        data = self.app.settings.get()
+        data.source_directories = [".", "src"]
+        self.app.settings.save(data)
+        expected = self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False).changed_paths[0]
+        for relative in ("build/ignore.cpp", ".git/ignore.cpp", "src/.cache/ignore.cpp"):
+            path = self.app.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("invalid code")
+        self.assertEqual(_scan(self.app), (expected,))
+
+    def test_cmake_literals_are_not_executed(self):
+        self.assertIn("${VAR}", _quote("${VAR}"))
+        self.assertTrue(_quote("]=]").startswith("[==["))
+        for value in ("a;b", "$<CONFIG>", "bad\nline"):
+            with self.assertRaises(SettingsError):
+                _quote(value)
+
+    def test_explicit_build_source_root_is_rejected(self):
+        data = self.app.settings.get()
+        data.source_directories = ["build"]
+        self.app.settings.save(data)
+        with patch("cppbuild.engine.process") as call:
+            with self.assertRaises(SettingsError):
+                self.app.update()
+        call.assert_not_called()
+
+    def test_invalid_management_stops_process(self):
+        self.app._last_update = object()
+        self.app.settings.path.write_text("broken")
+        with patch("cppbuild.engine.process") as call:
+            with self.assertRaises(SettingsError):
+                self.app.build()
+        call.assert_not_called()
+        self.assertIsNone(self.app._last_update)
+
+    def test_unowned_build_directory_is_rejected(self):
+        self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
+        path = self.app.root / ".cppbuild/build/vs2022-x64-executable"
+        path.mkdir(parents=True)
+        (path / "other.txt").write_text("keep")
+        with self.assertRaises(SettingsError):
+            self.app.update()
+        self.assertEqual((path / "other.txt").read_text(), "keep")

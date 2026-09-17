@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import asdict
 import hashlib
+import os
 from pathlib import Path
 import re
 
@@ -201,6 +202,7 @@ class Project:
         self.solution, self.root, self.name = solution, Path(root).resolve(), name
         self.settings = ProjectSettings(self)
         self._build_settings = ProjectBuildSettings()
+        self._last_update = None
 
     def _check_active(self):
         if self.solution._projects.get(self.name) is not self:
@@ -226,6 +228,60 @@ class Project:
         if values.project_type not in self.settings._data.types:
             raise SettingsError("Selected type is not supported by the Project")
         return values
+
+    def update(self):
+        from .engine import update
+        return update(self)
+
+    def build(self):
+        from .engine import operate
+        return operate(self, "build")
+
+    def clean(self):
+        from .engine import operate
+        return operate(self, "clean")
+
+    def rebuild(self):
+        from .engine import operate
+        return operate(self, "rebuild")
+
+    def run(self):
+        from .engine import operate
+        return operate(self, "run")
+
+    def add_file(self, destination, *, content=None, template_name=None, replacements=None, auto_update=True):
+        from .engine import file_path, file_report
+        if template_name is not None:
+            raise NotImplementedError("File templates are scheduled for M6")
+        if not isinstance(content, str) or replacements is not None:
+            raise SettingsError("Pass text content; replacements require a template")
+        path = file_path(self, destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(content)
+        return file_report(self, [path], auto_update)
+
+    def remove_file(self, path, *, auto_update=True):
+        from .engine import file_path, file_report
+        path = file_path(self, path)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        path.unlink()
+        return file_report(self, [path], auto_update)
+
+    def move_file(self, source, destination, *, auto_update=True):
+        from .engine import file_path, file_report
+        source, destination = file_path(self, source), file_path(self, destination)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if destination.exists():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Windows rename refuses a destination created concurrently as well.
+        if os.name != "nt":
+            raise NotImplementedError("Move currently targets Windows")
+        source.rename(destination)
+        return file_report(self, [source, destination], auto_update)
 
 
 class Solution:
@@ -274,7 +330,7 @@ class Solution:
         if name in values.projects:
             raise SettingsError(f"Duplicate Project: {name}")
         values.projects[name] = root.relative_to(self.root).as_posix()
-        if not values.projects or len(values.projects) == 1:
+        if len(values.projects) == 1:
             values.main_project = name
         self.settings._validate(values)
         project = Project(self, root, name)
