@@ -8,6 +8,12 @@
 
 ## 現行の設計成果物
 
+実装開始後の追加資料：
+
+- [MILESTONES.md](MILESTONES.md)：段階別のAcceptance Criteriaと完了状態。
+- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)：実装範囲・具体化・実検証結果・制約。
+- [INTEGRATION_DECISION.md](INTEGRATION_DECISION.md)：M3aの実測結果と、M3bに必須の未合意判断。
+
 | ファイル | 用途 |
 | --- | --- |
 | [API_DESIGN.md](API_DESIGN.md) | 現行APIの入口・引数・責務と合意状態。API設計の主資料。 |
