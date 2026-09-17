@@ -112,7 +112,7 @@ def operate(solution, operation):
                 if node.key in protected:
                     continue
                 _, child_build = engine._locations(node.project, node.settings)
-                result = engine.process(["cmake", "--build", child_build, "--config", node.settings.configuration, "--target", "clean"], node.project.root)
+                result = engine.clean_target(node.project, node.settings, child_build)
                 results.append(result)
                 if not result.success:
                     return engine.OperationReport(tuple(results))

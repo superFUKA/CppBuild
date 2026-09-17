@@ -75,4 +75,19 @@ M3aでは独立.vcxproj統合候補の検証コードを実装した。
 自己レビューでEXCLUDE_FROM_ALLが.slnの明示target処理を妨げる問題を修正し、対象選択はMSBuildの/tに限定した。
 修正後の全32件成功（実VS2022試験5件、32.766秒）。M3bのACを確認した。
 
-M4〜M6は未完了。外部依存・PCH・GoogleTest・テンプレート・イベントは後続。
+## M4：外部依存・複数種類・PCH
+
+- CMakePackage、CMakeSource、ImportedLibraryを構造化データとして追加。対応するsettings.link_*で登録・保存し、再open後もIDで解除可能。
+- packageは明示したディレクトリからCONFIGモードで取得する。sourceは所有Projectのビルドツリー内の専用binary_dirへadd_subdirectoryする。importedは構成別の実ファイルを参照し、対応構成がない場合に別構成へ暗黙フォールバックしない。
+- link_solutionは登録時点の主Project名を記録する。後で主Projectを変えてもリンク先を切り替えない。外部Solutionのビルド条件は非保存のSolutionBuildSettings.external_build_settings（.cppbuildパス→設定）で明示でき、親を勝手に付け替えない。
+- 静的／共有の同時要求は依存グラフで種類別ノードとして扱う。同一Projectの別種類を別のアプリから使える。一つの利用側から同じProjectの静的／共有の両方をリンクする衝突は診断する。
+- PCHは共通管理設定のproject_headers/system_headersで保存し、set_pch/clear_pchから変更。HEADER_ONLYではコンパイルしない。ヘッダー削除を伴わない。
+- cleanは対象.vcxprojのCleanとBuildProjectReferences=falseを指定。外部ソースのライブラリ・IMPORTED成果物を消さないことを実測した。
+- 依存なしのM2からの差分を自己レビューし、外部Solutionの明示構成指定、種類衝突診断、推移的外部利用要件、解除後に古い外部CMakeを取り込まない処理を確認・修正。
+
+実VS2022試験：別SolutionのDebug/Release、importedへの切替、外部source/packageの登録・解除、PCH生成と解除、
+外部バイナリを保持したclean、static/shared同時生成と実行が成功。解除後は元の外部CMakeを意図的に失敗する内容へ変更しても利用側build/runが成功することを確認。
+外部CMake自身の独自ダウンロード等の副作用の取消・アンインストールは行わない。
+全35件の再実行成功（実VS試験8件、48.909秒）。さらに不正依存レコード・再帰した実行設定の回帰テストを追加して再確認。
+
+M5〜M6は未完了。GoogleTest・テンプレート・イベントは後続。

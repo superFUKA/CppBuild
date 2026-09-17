@@ -4,7 +4,7 @@ from .engine import FileOperationReport, OperationReport, ProcessReport, UpdateR
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport,
+    TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary,
 )
 
 __all__ = [
@@ -13,4 +13,5 @@ __all__ = [
     "ChangeReport", "SettingsError", "SettingsConflictError",
     "FileOperationReport", "OperationReport", "ProcessReport", "UpdateReport",
     "Dependency", "LinkReport",
+    "CMakePackage", "CMakeSource", "ImportedLibrary",
 ]

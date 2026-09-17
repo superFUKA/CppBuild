@@ -13,6 +13,7 @@ from .models import (
     TypeSettingsData, Dependency, LinkReport,
 )
 from . import storage
+from . import dependencies as dependency_data
 
 
 def _name(value):
@@ -25,7 +26,11 @@ def _strings(values):
         raise SettingsError("Expected a list of strings without NUL")
 
 
-def _build_settings(value):
+def _build_settings(value, seen=None):
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        raise SettingsError("Recursive external build settings")
+    seen = seen | {id(value)}
     for key, allowed in (("configuration", {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}),
                          ("architecture", {"x64", "Win32", "ARM64"}),
                          ("cpp_standard", {17, 20, 23})):
@@ -49,6 +54,12 @@ def _build_settings(value):
         if value.build_projects is not None:
             _strings(value.build_projects)
         _strings(value.run_projects)
+        if not isinstance(value.external_build_settings, dict):
+            raise SettingsError("external_build_settings must be a mapping")
+        for directory, data in value.external_build_settings.items():
+            if not isinstance(directory, str) or not directory or not isinstance(data, SolutionBuildSettings):
+                raise SettingsError("Expected external .cppbuild path -> SolutionBuildSettings")
+            _build_settings(data, seen)
 
 
 class _Settings:
@@ -87,11 +98,16 @@ class ProjectSettings(_Settings):
         if not isinstance(values.dependencies, dict):
             raise SettingsError("dependencies must be a mapping")
         for key, dependency in values.dependencies.items():
-            if not isinstance(key, str) or not key or not isinstance(dependency, Dependency):
+            if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key):
                 raise SettingsError("Expected dependency id -> Dependency")
-            _name(dependency.project)
-            if dependency.project_type not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.HEADER_ONLY}:
-                raise SettingsError("Only library types can be linked")
+            dependency_data.validate(self.owner, dependency)
+        _strings(values.project_headers)
+        _strings(values.system_headers)
+        for header in values.project_headers:
+            storage.contained(self.owner.root, header)
+        for header in values.system_headers:
+            if not header or any(c in header for c in '<>\r\n;"'):
+                raise SettingsError("Invalid system header")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
@@ -101,7 +117,9 @@ class ProjectSettings(_Settings):
     def _read(self):
         raw = storage.manifest(self.path, "project")
         raw.setdefault("dependencies", {})
-        storage.object_fields(raw, {"name", "source_directories", "types", "dependencies"})
+        raw.setdefault("project_headers", [])
+        raw.setdefault("system_headers", [])
+        storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
         types, revisions = {}, {self.path: storage.digest(self.path)}
@@ -121,12 +139,8 @@ class ProjectSettings(_Settings):
         if not isinstance(raw["dependencies"], dict):
             raise SettingsError("dependencies must be a mapping")
         for key, data in raw["dependencies"].items():
-            storage.object_fields(data, {"project", "project_type"})
-            try:
-                dependencies[key] = Dependency(data["project"], ProjectType(data["project_type"]))
-            except (ValueError, TypeError) as exc:
-                raise SettingsError("Invalid dependency type") from exc
-        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies)
+            dependencies[key] = dependency_data.decode(data)
+        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"])
         self._validate(values)
         return values, revisions
 
@@ -153,7 +167,8 @@ class ProjectSettings(_Settings):
             refs[kind.value] = filename
             paths.append(path)
         payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
-                   "dependencies": {key: asdict(value) for key, value in values.dependencies.items()}}
+                   "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
+                   "project_headers": values.project_headers, "system_headers": values.system_headers}
         storage.atomic_write(self.path, storage.encoded(storage.envelope("project", payload)))
         self._data = values
         self._revision = {p: storage.digest(p) for p in [self.path, *paths]}
@@ -179,6 +194,50 @@ class ProjectSettings(_Settings):
         values = self.get()
         del values.dependencies[dependency_id]
         return self.save(values)
+
+    def _link(self, value):
+        values = self.get()
+        dependency_data.validate(self.owner, value)
+        if value in values.dependencies.values():
+            raise SettingsError("Dependency is already registered")
+        key = uuid.uuid4().hex
+        values.dependencies[key] = deepcopy(value)
+        self.save(values)
+        return LinkReport(key, getattr(value, "target", getattr(value, "project", "imported")), getattr(value, "project_type", None))
+
+    def link_solution(self, config_directory, link_type):
+        config = dependency_data.path(self.owner, str(config_directory))
+        other = Solution.open(config)
+        name = other.settings.get().main_project
+        if name is None or link_type not in other.get_project(name).settings.get().types:
+            raise SettingsError("External Solution needs a main Project of the requested type")
+        return self._link(Dependency(name, link_type, str(config)))
+
+    def link_package(self, package):
+        from .models import CMakePackage
+        if not isinstance(package, CMakePackage):
+            raise SettingsError("Expected CMakePackage")
+        return self._link(package)
+
+    def link_cmake_source(self, source):
+        from .models import CMakeSource
+        if not isinstance(source, CMakeSource):
+            raise SettingsError("Expected CMakeSource")
+        return self._link(source)
+
+    def link_imported_library(self, library):
+        from .models import ImportedLibrary
+        if not isinstance(library, ImportedLibrary):
+            raise SettingsError("Expected ImportedLibrary")
+        return self._link(library)
+
+    def set_pch(self, *, project_headers=(), system_headers=()):
+        values = self.get()
+        values.project_headers, values.system_headers = list(project_headers), list(system_headers)
+        return self.save(values)
+
+    def clear_pch(self):
+        return self.set_pch()
 
 
 class SolutionSettings(_Settings):
@@ -429,7 +488,7 @@ class Solution:
             raise SettingsError("Change main_project before removing it")
         for project in self.projects():
             project.settings.reload()
-            if any(d.project == name for d in project.settings._data.dependencies.values()):
+            if any(isinstance(d, Dependency) and d.solution_directory is None and d.project == name for d in project.settings._data.dependencies.values()):
                 raise SettingsError("Unlink references before removing this Project")
         del values.projects[name]
         with storage.write_lock(self.settings.path.parent):

@@ -179,10 +179,21 @@ def _cmake(project, settings, files, dependencies=()):
         for child in node.dependencies:
             child_alias = import_node(child)
             lines.append(f"target_link_libraries({alias} INTERFACE {child_alias})")
+        from .dependencies import cmake as external_cmake
+        for key, value in node.project.settings._data.dependencies.items():
+            lines.extend(external_cmake(node.project, node.settings, key, value, alias, "INTERFACE"))
         return alias
     for dependency in dependencies:
         alias = import_node(dependency)
         lines.append(f"target_link_libraries({name} {scope} {alias})")
+    from .dependencies import cmake as external_cmake
+    for key, value in project.settings._data.dependencies.items():
+        lines.extend(external_cmake(project, settings, key, value, name, scope))
+    if kind != ProjectType.HEADER_ONLY:
+        headers = [_path(storage.contained(project.root, h)) for h in project.settings._data.project_headers]
+        headers += [_quote("<" + h + ">") for h in project.settings._data.system_headers]
+        if headers:
+            lines.append(f"target_precompile_headers({name} PRIVATE " + " ".join(headers) + ")")
     if files:
         lines += [f"source_group(TREE {_path(project.root)} PREFIX \"\" FILES\n  {listed}\n)"]
     return "\n".join(lines) + "\n"
@@ -287,7 +298,7 @@ def operate(project, operation):
                 return OperationReport(tuple(results))
         if operation in {"clean", "rebuild"}:
             # Dependencies are IMPORTED, so this tree cannot clean their binaries.
-            result = process(["cmake", "--build", build, "--config", settings.configuration, "--target", "clean"], project.root)
+            result = clean_target(project, settings, build)
             results.append(result)
             if not result.success or operation == "clean":
                 return OperationReport(tuple(results))
@@ -305,6 +316,11 @@ def operate(project, operation):
                 raise SettingsError("Expected one built executable")
             results.append(run_artifact(project, settings, artifacts, nodes))
         return OperationReport(tuple(results), artifacts)
+
+
+def clean_target(project, settings, build):
+    return process(["cmake", "--build", build, "--config", settings.configuration,
+                    "--target", _target(project, settings), "--", "/t:Clean", "/p:BuildProjectReferences=false"], project.root)
 
 
 def run_artifact(project, settings, artifacts, nodes):

@@ -29,13 +29,35 @@ class TypeSettingsData:
 class Dependency:
     project: str
     project_type: ProjectType
+    solution_directory: str | None = None
+
+
+@dataclass
+class CMakePackage:
+    name: str
+    target: str
+    directory: str
+
+
+@dataclass
+class CMakeSource:
+    directory: str
+    target: str
+
+
+@dataclass
+class ImportedLibrary:
+    project_type: ProjectType
+    locations: dict[str, str] = field(default_factory=dict)
+    include_directories: list[str] = field(default_factory=list)
+    import_libraries: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class LinkReport:
     dependency_id: str
     target: str
-    project_type: ProjectType
+    project_type: ProjectType | None
 
 
 @dataclass
@@ -44,6 +66,8 @@ class ProjectSettingsData:
     types: dict[ProjectType, TypeSettingsData]
     source_directories: list[str] = field(default_factory=lambda: ["src", "include"])
     dependencies: dict[str, Dependency] = field(default_factory=dict)
+    project_headers: list[str] = field(default_factory=list)
+    system_headers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -70,6 +94,7 @@ class SolutionBuildSettings:
     cpp_standard: int = 20
     build_projects: list[str] | None = None
     run_projects: list[str] = field(default_factory=list)
+    external_build_settings: dict[str, "SolutionBuildSettings"] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

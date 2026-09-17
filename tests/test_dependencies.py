@@ -64,6 +64,15 @@ class DependencyTests(unittest.TestCase):
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=[]))
         self.assertEqual(_selected(self.solution, roots, "build"), [])
 
+    def test_invalid_dependency_record_and_recursive_settings(self):
+        from cppbuild.dependencies import decode
+        with self.assertRaises(SettingsError):
+            decode(None)
+        settings = SolutionBuildSettings()
+        settings.external_build_settings["other/.cppbuild"] = settings
+        with self.assertRaises(SettingsError):
+            self.solution.set_build_settings(settings)
+
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
     def test_public_api_whole_individual_clean_and_unlink(self):
         self.math.add_file("include/math.hpp", content="int value();\n", auto_update=False)

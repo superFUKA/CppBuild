@@ -1,7 +1,8 @@
 """Validate a dependency closure before generating or starting any tools."""
 from dataclasses import dataclass
+import hashlib
 
-from .models import SettingsError
+from .models import Dependency, SettingsError
 
 
 @dataclass
@@ -16,12 +17,17 @@ class Node:
 
     @property
     def label(self):
-        return f"{self.project.name}_{self.settings.project_type.value}"
+        suffix = hashlib.sha256(str(self.project.root).encode()).hexdigest()[:12]
+        return f"{self.project.name}_{self.settings.project_type.value}_{suffix}"
 
 
 def resolve(projects):
     """Return roots and dependency-first nodes with per-operation settings copies."""
-    nodes, visiting, ordered, loaded = {}, set(), [], set()
+    nodes, visiting, ordered, loaded, external = {}, set(), [], set(), {}
+    overrides = {}
+    for project in projects:
+        for directory, data in project.solution._build_settings.external_build_settings.items():
+            overrides[(project.solution.root / directory).resolve()] = data
 
     def visit(project, requested=None):
         project._check_active()
@@ -37,11 +43,25 @@ def resolve(projects):
         node = Node(project, settings, [])
         visiting.add(key)
         for reference in project.settings._data.dependencies.values():
+            if not isinstance(reference, Dependency):
+                continue
             try:
-                other = project.solution.get_project(reference.project)
+                solution = project.solution
+                if reference.solution_directory is not None:
+                    from .core import Solution
+                    from .dependencies import path
+                    config = path(project, reference.solution_directory)
+                    if config not in external:
+                        external[config] = Solution.open(config)
+                        if config in overrides:
+                            external[config].set_build_settings(overrides[config])
+                    solution = external[config]
+                other = solution.get_project(reference.project)
             except KeyError as exc:
                 raise SettingsError(f"Missing dependency Project: {reference.project}") from exc
             child = visit(other, reference.project_type)
+            if any(d.project.root == child.project.root and d.settings.project_type != child.settings.project_type for d in node.dependencies):
+                raise SettingsError("One consumer cannot link multiple kinds of the same Project")
             if (settings.configuration, settings.architecture) != (child.settings.configuration, child.settings.architecture):
                 raise SettingsError(f"Incompatible configuration/architecture: {project.name} -> {other.name}")
             if child not in node.dependencies:
