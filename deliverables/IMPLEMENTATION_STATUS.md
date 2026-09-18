@@ -1,5 +1,13 @@
 # 実装・検証記録
 
+## 2026-09-19：公開リポジトリの構成整理
+
+- `.gitignore`にCMake/VS生成物、Python環境・キャッシュ、ローカルIDE/エージェント設定、`.env`を追加。ソース・テスト・利用例は除外しない。追跡済みの除外対象はなし。ローカル生成物は削除していない。
+- `.gitattributes`で改行規則を指定。READMEをM5/M6完了後の内容へ更新し、CONTRIBUTING.mdに開発・検証・配布手順を追加。pyproject.tomlへREADMEを登録し、MANIFEST.inでソース配布物の範囲を明示した。
+- 実装記録の個人環境の絶対パスを一般化。Git履歴は変更しておらず、過去コミットには元の記載が残る。
+- 通常サンドボックスではpipの一時領域へのアクセスが拒否された。承認後の`python -m pip wheel . --no-deps --wheel-dir .test-work/oss-wheels`は成功。wheel内の全15モジュールとメタデータ、生成されたソース配布用ファイル一覧の包含・除外を確認した。ソースアーカイブ自体の生成と公開は未実施。製品コードを変更していないため実VS2022試験は再実行していない。
+- LICENSEは未指定で、採用ライセンスと権利者表記をユーザーへ確認中。現時点ではOSSとしての配布条件が確定したとは扱わない。次の作業は指定されたLICENSE・パッケージのライセンス情報の追加と配布物の再確認。
+
 2026-09-17。設計上の合意状態と、ここに記載する初期実装の選択は別。
 
 ## M1：管理モデルと保存境界
@@ -104,7 +112,7 @@ M5〜M6は未完了。GoogleTest・テンプレート・イベントは後続。
 
 - VS2022検出失敗の原因は生のプロセス環境に`Path`と`PATH`が重複し、MSBuildが`MSB6001` / `ArgumentException`で失敗することだった。Pythonの環境辞書を子プロセスへ明示し、親プロセス環境を書き換えずに正規化。既存36件が実VS2022試験を含め49.000秒で成功した。
 - TEST種類のCMake生成、固定GoogleTest 1.14.0のFetchContent・gtest_main・PRE_TEST列挙、Project.test / Solution.testを実装。GoogleTestは各Project内で所有し、updateではコンパイルしない。
-- `ProjectBuildSettings.googletest_archive`は非保存のローカルZIP指定。省略時の公式URLと同じSHA256（`1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4`）をCMakeで検証する。今回の実検証では既存の`C:/Project/実験用/RFHTest/build/_deps/googletest-subbuild/googletest-populate-prefix/src/v1.14.0.zip`を読み取り専用で使用した。
+- `ProjectBuildSettings.googletest_archive`は非保存のローカルZIP指定。省略時の公式URLと同じSHA256（`1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4`）をCMakeで検証する。今回の実検証では既存の`固定版1.14.0.zip（個人環境の絶対パスは公開整理時に省略）`を読み取り専用で使用した。
 - オンライン取得はこの環境のネットワーク制限で失敗。ユーザーから「後で許可するのでそれ以外」を進める指示があり、以後の通信取得は保留。ローカルZIP展開・ビルド・実行の成功とオンライン取得成功は区別する。
 - CTestの構成指定・並列数を明示し、操作ごとに新しいJUnitファイルを読み取る。0件・全skip・XML欠落／破損・ビルド失敗を成功扱いにしない。全体testは独立した参加一覧・指定順・失敗後継続を持ち、個別testは全体選択に影響されない。
 - runの並列数・待機・失敗後継続、全体ビルドの並列数を追加。非同期時はRunReportのdone / wait / success（完了前None）で追跡する。ビルド工程は同期実行し、失敗時はアプリを起動しない。並列起動は一覧順の組単位で処理し、結果の順序を維持する。

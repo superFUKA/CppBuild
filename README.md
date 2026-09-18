@@ -1,25 +1,52 @@
 # CppBuild
-C++プロジェクトを管理するための実装やCMakeファイル群
 
-Pythonライブラリとして段階的に実装中です。現行設計は
-[API設計](deliverables/API_DESIGN.md)、実装範囲と検証結果は
-[実装記録](deliverables/IMPLEMENTATION_STATUS.md)、完了条件は
-[マイルストーン](deliverables/MILESTONES.md)を参照してください。
+CMakeをラップし、C++のSolution／ProjectをPythonから管理するライブラリです。個別Projectの生成物を全体と共用し、Visual Studio 2022で生成・ビルド・実行・テストを行います。
 
-テスト: `python -m unittest discover -s tests -v`
+## 動作環境
 
-実VS2022試験（PowerShell）:
+- Windows、Python 3.11以上
+- CMake／CTest 3.24以上（PATHから利用可能、またはToolSettingsで指定）
+- Visual Studio 2022のC++開発ツールとWindows SDK
 
-```powershell
-$env:CPPBUILD_TEST_VS2022='1'
-python -m unittest discover -s tests -v
-```
+Python実行時の外部パッケージ依存はありません。パッケージのビルドにはsetuptoolsが必要です。
 
-独立Projectの作成・実ビルド・実行例:
+## インストールと利用例
+
+リポジトリを取得し、ルートで実行します。
 
 ```powershell
-python -m examples.independent_project C:\work\NewCppBuildDemo
+python -m pip install .
+python -m examples.independent_project .test-work/demo
+python -m examples.google_test .test-work/google-test
 ```
 
-現段階の実ビルドにはCMakeとVS2022のC++ツールが必要です。
-Solution全体のビルド、リンク依存、GoogleTest等はまだ実装していません。
+作成先には新しいディレクトリを指定してください。GoogleTestの初回構成では固定版1.14.0をGitHubから取得し、SHA256を検証します。オフラインでは同じ版のZIPを指定できます。
+
+```powershell
+python -m examples.google_test .test-work/offline-test C:/archives/v1.14.0.zip
+python -m examples.complete_workflow .test-work/workflow
+```
+
+利用例はリポジトリ内で実行します。wheelにはライブラリ本体のみを含めます。詳しくは[利用手順](deliverables/USAGE.md)を参照してください。
+
+## 実装範囲
+
+- Solution／Projectの管理・設定保存、非保存ビルド設定と継承
+- 個別生成・全体.sln統合、内部／外部依存、静的／共有ライブラリ、PCH
+- GoogleTest／CTest、実行順・並列数・非同期待機
+- テンプレート、イベント、環境診断、観測済み情報の取得
+
+対象はVS2022です。他のgeneratorやVS IDEのGUI表示は検証していません。バージョン0.1.0の初期実装であり、制約・検証範囲は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)に記載しています。
+
+## 開発と資料
+
+- [開発・貢献手順](CONTRIBUTING.md)
+- [API設計](deliverables/API_DESIGN.md)
+- [資料一覧](deliverables/DELIVERABLES.md)
+- [マイルストーン](deliverables/MILESTONES.md)
+
+`cppbuild/`はライブラリ、`tests/`はテスト、`examples/`は利用例です。`deliverables/`は現行資料、`references/`は設計履歴です。履歴内の旧仕様は現行仕様として扱いません。
+
+## ライセンス
+
+ライセンスは未指定です。OSSとしての配布条件は、権利者によるLICENSEの追加後に確定します。

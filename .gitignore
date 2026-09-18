@@ -1,8 +1,38 @@
+# Python caches and local environments
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging and generated CMake / Visual Studio outputs
 build/
 dist/
-.pytest_cache/
 .test-work/
+.cppbuild/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+.vs/
+*.suo
+*.user
+
+# Local editor, agent, and environment settings
+/.vscode/
+/.idea/
+/.codex/
+/.agents/
+.env
+.env.*
+!.env.example
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

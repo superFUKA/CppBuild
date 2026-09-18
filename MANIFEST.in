@@ -1,0 +1,13 @@
+include README.md CONTRIBUTING.md
+recursive-include cppbuild *.py
+recursive-include examples *.py
+recursive-include tests *.py
+recursive-include deliverables *.md
+prune .test-work
+prune build
+prune dist
+prune references
+prune .git
+prune .codex
+prune .agents
+global-exclude __pycache__ *.py[cod] .env .env.*
