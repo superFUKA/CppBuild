@@ -1,4 +1,4 @@
-include README.md CONTRIBUTING.md
+include README.md CONTRIBUTING.md LICENSE
 recursive-include cppbuild *.py
 recursive-include examples *.py
 recursive-include tests *.py

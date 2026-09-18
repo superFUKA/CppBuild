@@ -49,4 +49,4 @@ python -m examples.complete_workflow .test-work/workflow
 
 ## ライセンス
 
-ライセンスは未指定です。OSSとしての配布条件は、権利者によるLICENSEの追加後に確定します。
+[MIT License](LICENSE)。著作権表記は`Copyright (c) 2026 CppBuild contributors`です。
