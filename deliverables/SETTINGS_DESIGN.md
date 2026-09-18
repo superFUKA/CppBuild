@@ -79,6 +79,8 @@ Library/.cppbuild/
 
 ## 5. 実行順の既定と設定（暫定採用）
 
+2026-09-18：M5の具体フィールド・既定値・非同期結果は[API設計のM5実装補足](API_DESIGN.md#tests)を参照。すべて実行用設定であり管理JSONへ保存しない。GoogleTestは1.14.0の固定ZIPを採用し、ローカルZIP指定も同じSHA256検証を行う。
+
 既定の動作を用意し設定で変更できることは確認済み。複数アプリの起動順にCMake共通の唯一の既定はないため、以下を本ライブラリの案とする。
 
 | 操作 | 既定案 | 変更できる項目の案 |
@@ -92,6 +94,10 @@ runの既定は失敗時に後続を止め、終了コードを結果へ残す�
 runの順序をリンク依存だけから推測しない。CTest内部のケース順はテスト列挙順と同一であると保証せず、必要ならテスト依存・fixture等を使う。独立CMake構成間のビルド依存はライブラリ／全体Solution側で伝達する必要があり、個別CMakeが自動的に別構成の依存を解決すると仮定しない。
 
 ## 6. GoogleTestの導入（CMake標準機能による導入を暫定採用）
+
+2026-09-18実装・検証補足：1.14.0 ZIPの固定SHA256でオンライン取得とローカルZIPの両方を検証した。Projectごとの所有ツリー内で取得・ビルドし、Project間のダウンロードキャッシュ共有は行わない。取得はconfigure時、コンパイルはbuild時、ケース列挙はPRE_TEST。利用手順は[USAGE.md](USAGE.md)を参照。
+
+M6の保存境界：共有素材の登録名とSolution内相対パスは`SolutionSettingsData.file_templates`に保存する。旧JSONにこの項目がなければ空辞書として読む。`ToolSettings`はSolution/Projectの非保存ビルド設定に含め、Project既定はINHERIT。環境変数・ツールパス・イベント登録・infoの観測状態を管理JSONやSolutionテンプレートから復元しない。
 
 GoogleTestはCMakeのFetchContentによる取得・組み込み、GTest::gtest_mainへのリンク、gtest_discover_testsでのCTest登録、CTestによる実行という公式例に沿って導入できる。Python側に独自のダウンロード・ビルド処理を作る必要はない。
 

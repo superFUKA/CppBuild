@@ -75,6 +75,14 @@ class SolutionSettingsData:
     name: str
     projects: dict[str, str] = field(default_factory=dict)
     main_project: str | None = None
+    file_templates: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ToolSettings:
+    cmake: str = "cmake"
+    ctest: str = "ctest"
+    environment: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -85,6 +93,10 @@ class ProjectBuildSettings:
     project_type: ProjectType | None = None
     parallel: int = 1
     run_arguments: list[str] = field(default_factory=list)
+    run_wait: bool = True
+    test_parallel: int = 1
+    googletest_archive: str | None = None
+    tools: ToolSettings | Inheritance = INHERIT
 
 
 @dataclass
@@ -95,6 +107,13 @@ class SolutionBuildSettings:
     build_projects: list[str] | None = None
     run_projects: list[str] = field(default_factory=list)
     external_build_settings: dict[str, "SolutionBuildSettings"] = field(default_factory=dict)
+    parallel: int = 1
+    run_parallel: int = 1
+    run_wait: bool = True
+    run_continue_on_failure: bool = False
+    test_projects: list[str] | None = None
+    test_continue_on_failure: bool = True
+    tools: ToolSettings = field(default_factory=ToolSettings)
 
 
 @dataclass(frozen=True)

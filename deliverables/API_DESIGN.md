@@ -85,6 +85,10 @@ AppのcleanでMath・Toolを削除しない。この合意は以下の全体統�
 
 ## ジャンル2：テンプレート
 
+2026-09-18 M6実装補足：以下の未確定記述に対し、現在の実装選択は次のとおり。設計上の合意と実装選択を区別する。
+`TemplateTools.create_solution_template`は作成先の絶対`Path`を返し、`Solution.create(..., template=path)`が復元する。保存済み設定・ソース・素材をコピーし、非保存のビルド設定・イベント・観測状態は引き継がない。`.cppbuild`の生成物、`.git`、`build`、`dist`、`.test-work`、`__pycache__`、`.venv`、`.cache`は除外し、管理設定と共有素材は別途復元する。既存出力先・元との入れ子・ファイルシステムリンクを拒否する。外部Solution参照は外部の絶対パスのままで、配布用に内包しない。
+共有素材は`.cppbuild/templates`配下に保存し、`settings.set_file_template(name, path)`で登録、`file_templates()`でコピー取得、`remove_file_template(name)`で登録のみ解除する。置換はUTF-8本文だけを対象に一度行い、展開時のキーは`{{name}}`と完全一致が必要。置換を省略するとバイナリもそのままコピーできる。コード・ファイル名の推測置換やエスケープ構文はない。
+
 | API案 | 責務 |
 | --- | --- |
 | TemplateTools.create_solution_template(solution, destination_directory) | 設定・ソース・素材をコピーしテンプレート参照を返す |
@@ -108,6 +112,8 @@ Solutionテンプレートは各Project設定を含み、ビルド成果物を�
 | project.settings.get() / save(values) / reload() | 個別の設定管理。基本操作は確認済み |
 | solution.settings.set_build_profile(profile) | ビルド設定を保存しない最新方針により、保存用APIとしては撤回。名前付き構成管理は利用側に委ねる |
 | solution.info() | 設定・認識済みファイル・取得済み成果物・状態等。取得のための走査やCMake実行なし |
+
+M6実装：`info()`は`SolutionInfo`とProjectごとの`ProjectInfo`を返す。設定はコピー、ファイルと成果物は直近の観測値。`generation_state`はunknown/current/stale/failed、`build_state`はこれらにcleanedを加える。再open直後はunknown。API経由の変更と設定差分で古さを判定し、外部ファイル変更は走査しないため`external_changes_checked=False`を返す。`last_operation`と`last_success`は直近操作の結果で、非同期run未完了時はsuccessがNone。成果物一覧は存在を再検証した一覧ではない。
 
 詳細案：SolutionSettingsDataは所属参照・main_project・共有テンプレート等、ProjectSettingsDataは対応種類・ソース・依存・PCH・種類別設定への参照等を持つ。実行用のSolutionBuildSettings／ProjectBuildSettingsは含めず、saveの対象にしない。全体saveで個別設定を上書きしない。所属の変更はadd/removeを通す。
 
@@ -198,6 +204,15 @@ build等にprofile・configuration・種類・argsをばらばらに並べない
 
 ## ジャンル8：テスト
 
+2026-09-18 M5実装補足：`project.test()` / `solution.test()`と`TestReport`を追加した。以下の過去の未検証記述は設計時点の記録で、最新の実検証は[実装記録](IMPLEMENTATION_STATUS.md)を参照。
+非保存の`SolutionBuildSettings.test_projects`で独立選択し、`None`はTEST種類の全所属（名前順）、`[]`は対象なしを表す。明示一覧は指定順。個別testは全体選択に依存しない。非TESTへのtestとTESTへのrunは拒否する。
+`TestReport`は`processes`・`cases`（name/status/output）・`diagnostics`・全体操作時の`projects`を持つ。0件、全件skip、結果XMLの欠落・破損、工程失敗を成功扱いにしない。取得できたケースと前工程の結果は保持する。
+GoogleTest 1.14.0 ZIPとSHA256を固定し、FetchContentで展開・組み込む。非保存の`ProjectBuildSettings.googletest_archive`で同じZIPのローカルパスを渡せる。省略時は公式GitHub URLから取得する。2026-09-18に許可後のオンライン取得と統合利用例のテスト成功を確認した。
+
+M5の実行設定：Solutionの`parallel`は全体MSBuildの並列数、`run_parallel`は同時実行数（既定1）、`run_wait`は終了待機（既定True）、`run_continue_on_failure`は失敗後継続（既定False）、`test_continue_on_failure`はProject間のテスト失敗後継続（既定True）。Projectの`test_parallel`はCTestの`-j`（既定1）、`run_wait`は個別runの終了待機。全体runはSolutionの制御設定を使う。
+runは必要なビルドを同期実行後、既定では`OperationReport`を返す。`run_wait=False`では`RunReport`を返し、`done`と`wait(timeout=None)`で完了を確認できる。未完了時の`success`はNone。ビルド失敗時はアプリを起動せず`OperationReport`を返す。
+並列runは対象一覧を最大`run_parallel`件ずつ処理し、各組の完了後に次の組へ進む。結果の並びは対象一覧順で、並列時のOS上の起動・終了順は保証しない。停止設定は次の組に適用し、既に起動したアプリは終了を待つ。非同期runはPython終了から切り離す機能ではなく、終了コード・出力はwaitで回収する。非同期実行中の成果物に対するclean/rebuildは利用側でwait後に行う。
+
 TESTを独立した種類としsolution.add_project(..., project_type=ProjectType.TEST)で作る。solution.test()／project.test()で必要なビルド後に実行しTestReportを返す基本構成は、GoogleTestで成立することを条件に確認済み。GoogleTest採用・取得方法・版・標準配置は未確定。実ビルド未検証。
 
 全体のテスト参加はビルド・実行参加とは別に指定する。Solution設定へtest_projectsを置くことは今回の整合案であり未合意。Project単独のtestは全体参加に依存しない。
@@ -218,6 +233,9 @@ project.settings.set_pch(project_headers=..., system_headers=...)／clear_pch()�
 
 ## ジャンル10：環境チェック
 
+M6実装：`Environment.check(options=None)`は`EnvironmentOptions`（tools/configuration/architecture/cpp_standard/require_ctest）を受け取る。`EnvironmentReport.items`の各`EnvironmentItem`はname/path/version/success/detail/actionを持ち、追加Projectの結果は`projects`で返す。CMake・必要時のCTestを確認し、一時領域で指定構成のVS2022 C++構成・ビルドを実行する。依存のパスとローカルGoogleTest ZIPのハッシュもowner経由の診断で検査する。パッケージ内targetの使用可否は実buildで確認する。
+`ToolSettings(cmake="cmake", ctest="ctest", environment={})`は実操作と診断で共用する非保存設定。実行ファイル名または絶対パスを指定し、environmentは子プロセスだけに適用する。Projectのtools既定は親継承。全体生成・ビルドではconfiguration/architecture/toolsの一致を要求する。
+
 Environment.check(options)はSolutionを開く前の確認。solution.check_environment()／project.check_environment()は実操作と同じ設定・ツール条件で確認する。旧options引数の整理は実行時データ設計へ残す。
 
 確認パス・バージョン・不足・必要な対応をデータで返し、表示は利用側が行う。自動インストールは対象外。具体項目・結果型・Environment.checkの引数省略可否は未確定。
@@ -225,6 +243,10 @@ Environment.check(options)はSolutionを開く前の確認。solution.check_envi
 <a id="events"></a>
 
 ## ジャンル11：イベント
+
+M6実装：`file_changed`と、update/build/rebuild/clean/run/testの`before_*`・`after_*`をサポート。`Event`はname/solution/project/changed_paths/result/errorを持つ。全体操作はproject=None、個別操作は対象Projectを通知する。内部依存の処理ごとには別イベントを発火しない。非同期runのafterは起動処理の戻り時であり、完了確認はRunReport.waitを使う。
+コールバックは登録順。同じ登録の再帰通知を抑止し、通知中の追加登録は次回から、解除は直ちに反映する。深さ32で残りの通知を打ち切り、エラーとして報告する。file_changed内のファイル操作は許可し、最外周の通知後に変更先Projectを初出順で各1回更新する。更新はauto_update指定の論理和で決め、失敗してもファイル変更は保持してFileOperationReportへ記録する。ネストしたファイル操作の戻り値は全体の更新完了を表さないため、最外周の結果を確認する。
+コールバック内からのupdate/build/rebuild/clean/run/testの再入、およびfile_changed以外からのファイル変更は拒否する。beforeの失敗は本処理を中止しEventCallbackError、afterの失敗は実行結果を保持したEventCallbackErrorとなる。本処理の例外はafterのerrorへ渡してから再送出する。イベント登録は保存しない。
 
 solution.on(event, callback)は登録IDを返し、solution.off(registration_id)で解除する。Python関数はSolutionインスタンスの有効期間内だけ保持し、専用ファイルや関数の保存を要求しない。
 

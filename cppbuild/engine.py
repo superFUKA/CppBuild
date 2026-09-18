@@ -8,6 +8,7 @@ import subprocess
 
 from .models import ProjectType, SettingsError
 from . import storage
+from . import tooling, information
 
 
 @dataclass(frozen=True)
@@ -51,16 +52,20 @@ class FileOperationReport:
     update: UpdateReport | None = None
     update_error: str | None = None
     pending_update: bool = True
+    event_errors: tuple[str, ...] = ()
+    related_updates: tuple = ()
 
     @property
     def success(self):
-        return self.update_error is None and (self.update is None or self.update.success)
+        return (not self.event_errors and self.update_error is None and (self.update is None or self.update.success)
+                and all(error is None and result is not None and result.success for _, result, error in self.related_updates))
 
 
 def process(command, cwd, env=None):
     command = tuple(str(arg) for arg in command)
     result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, errors="replace", text=True, shell=False, env=env)
+                            stderr=subprocess.STDOUT, errors="replace", text=True, shell=False,
+                            env=dict(os.environ) if env is None else env)
     return ProcessReport(command, result.returncode, result.stdout)
 
 
@@ -116,20 +121,32 @@ def _locations(project, settings):
 
 def _cmake(project, settings, files, dependencies=()):
     kind = settings.project_type
-    if kind == ProjectType.TEST:
-        raise NotImplementedError("GoogleTest is scheduled for M5")
     name = project.name
     lines = ["cmake_minimum_required(VERSION 3.24)",
              f"project({name} LANGUAGES CXX)",
              "set(CMAKE_SUPPRESS_REGENERATION ON)",
              'set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel" CACHE STRING "" FORCE)']
+    if kind == ProjectType.TEST:
+        # The online and offline paths use the same fixed archive and digest.
+        archive = _quote('https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip')
+        if settings.googletest_archive is not None:
+            source = (project.root / settings.googletest_archive).resolve()
+            if not source.is_file():
+                raise SettingsError("googletest_archive must be an existing v1.14.0 ZIP")
+            archive = _path(source)
+        lines += ['include(FetchContent)',
+                  'set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)',
+                  'set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)',
+                  'set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)',
+                  f'FetchContent_Declare(googletest URL {archive} URL_HASH SHA256=1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4 DOWNLOAD_EXTRACT_TIMESTAMP TRUE TIMEOUT 60 INACTIVITY_TIMEOUT 15)',
+                  'FetchContent_MakeAvailable(googletest)', 'enable_testing()']
     listed = "\n  ".join(_path(p) for p in files)
     if kind == ProjectType.HEADER_ONLY:
         lines += [f"add_library({name} INTERFACE)", f"add_custom_target({name}_files SOURCES\n  {listed}\n)"]
     else:
         if not any(p.suffix.lower() in {".cpp", ".cxx", ".cc"} for p in files):
             raise SettingsError(f"No C++ sources found for {name}")
-        declaration = f"add_executable({name})" if kind == ProjectType.EXECUTABLE else f"add_library({name} {'STATIC' if kind == ProjectType.STATIC_LIBRARY else 'SHARED'})"
+        declaration = f"add_executable({name})" if kind in {ProjectType.EXECUTABLE, ProjectType.TEST} else f"add_library({name} {'STATIC' if kind == ProjectType.STATIC_LIBRARY else 'SHARED'})"
         lines += [declaration, f"target_sources({name} PRIVATE\n  {listed}\n)",
                   f"set_target_properties({name} PROPERTIES CXX_STANDARD {settings.cpp_standard} CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)"]
         display_only = [p for p in files if p.suffix.lower() not in {".cpp", ".cc", ".cxx"}]
@@ -194,6 +211,16 @@ def _cmake(project, settings, files, dependencies=()):
         headers += [_quote("<" + h + ">") for h in project.settings._data.system_headers]
         if headers:
             lines.append(f"target_precompile_headers({name} PRIVATE " + " ".join(headers) + ")")
+    if kind == ProjectType.TEST:
+        # CMake 4.2 requests a JSON path in UTF-8, but GoogleTest's narrow fopen
+        # on Windows cannot open that path under a legacy ANSI code page.
+        # Disable only discovery's JSON output; CMake also accepts the test list
+        # on stdout. CTest's own JUnit writer still produces our result file.
+        lines += [f'target_link_libraries({name} PRIVATE GTest::gtest_main)', 'include(GoogleTest)',
+                  'set(cppbuild_discovery_args)',
+                  'if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.2)',
+                  '  set(cppbuild_discovery_args DISCOVERY_EXTRA_ARGS "--gtest_output=")', 'endif()',
+                  f'gtest_discover_tests({name} DISCOVERY_MODE PRE_TEST WORKING_DIRECTORY {_path(project.root)} ${{cppbuild_discovery_args}})']
     if files:
         lines += [f"source_group(TREE {_path(project.root)} PREFIX \"\" FILES\n  {listed}\n)"]
     return "\n".join(lines) + "\n"
@@ -231,13 +258,14 @@ def _generate(project, settings, source, build, dependencies=()):
     query = build / ".cmake/api/v1/query/client-cppbuild/codemodel-v2"
     query.parent.mkdir(parents=True, exist_ok=True)
     query.touch()
-    result = process(["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", settings.architecture], project.root)
+    result = tooling.process(settings, ["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", settings.architecture], project.root)
     target = _target(project, settings)
     report = UpdateReport(result, files, build,
                           build / f"{project.name}.sln" if result.success else None,
                           build / f"{target}.vcxproj" if result.success else None,
                           build / f"{target}.vcxproj.filters" if result.success else None)
     project._last_update = report
+    information.generated(project, settings, report)
     return report
 
 
@@ -304,9 +332,10 @@ def operate(project, operation):
                 return OperationReport(tuple(results))
         for node in nodes:
             _, node_build = _locations(node.project, node.settings)
-            result = process(["cmake", "--build", node_build, "--config", node.settings.configuration,
+            result = tooling.process(node.settings, ["cmake", "--build", node_build, "--config", node.settings.configuration,
                               "--target", _target(node.project, node.settings), "--parallel", node.settings.parallel], node.project.root)
             results.append(result)
+            information.built(node.project, node.settings, _artifacts(node.project, node.settings, node_build) if result.success else (), result.success)
             if not result.success:
                 return OperationReport(tuple(results))
         artifacts = _artifacts(project, settings, build)
@@ -314,27 +343,43 @@ def operate(project, operation):
             executables = [p for p in artifacts if p.suffix.lower() == ".exe"]
             if len(executables) != 1 or not executables[0].is_file():
                 raise SettingsError("Expected one built executable")
-            results.append(run_artifact(project, settings, artifacts, nodes))
+            from .execution import execute
+            command, cwd, env = run_command(project, settings, artifacts, nodes)
+            return execute([(command, cwd, env)], results, artifacts, wait=settings.run_wait)
         return OperationReport(tuple(results), artifacts)
 
 
 def clean_target(project, settings, build):
-    return process(["cmake", "--build", build, "--config", settings.configuration,
+    result = tooling.process(settings, ["cmake", "--build", build, "--config", settings.configuration,
                     "--target", _target(project, settings), "--", "/t:Clean", "/p:BuildProjectReferences=false"], project.root)
+    information.invalidate(project, bump=False)
+    project._build_signature = information.signature(project, settings)
+    project._build_state = "cleaned" if result.success else "failed"
+    project._known_artifacts = ()
+    return result
 
 
-def run_artifact(project, settings, artifacts, nodes):
-    executables = [p for p in artifacts if p.suffix.lower() == ".exe"]
-    if len(executables) != 1 or not executables[0].is_file():
-        raise SettingsError("Expected one built executable")
-    env = os.environ.copy()
+def runtime_environment(nodes, settings=None):
+    env = tooling.environment(settings.tools) if settings is not None else os.environ.copy()
     dll_directories = []
     for node in nodes:
         if node.settings.project_type == ProjectType.SHARED_LIBRARY:
             _, build = _locations(node.project, node.settings)
             dll_directories.extend(str(p.parent) for p in _artifacts(node.project, node.settings, build) if p.suffix.lower() == ".dll")
     env["PATH"] = os.pathsep.join([*dll_directories, env.get("PATH", "")])
-    return process([executables[0], *settings.run_arguments], project.root, env=env)
+    return env
+
+
+def run_command(project, settings, artifacts, nodes):
+    executables = [p for p in artifacts if p.suffix.lower() == ".exe"]
+    if len(executables) != 1 or not executables[0].is_file():
+        raise SettingsError("Expected one built executable")
+    return [executables[0], *settings.run_arguments], project.root, runtime_environment(nodes, settings)
+
+
+def run_artifact(project, settings, artifacts, nodes):
+    command, cwd, env = run_command(project, settings, artifacts, nodes)
+    return process(command, cwd, env=env)
 
 
 def file_path(project, value):
@@ -347,11 +392,5 @@ def file_path(project, value):
 
 def file_report(project, paths, auto_update):
     project._last_update = None
-    if not auto_update:
-        return FileOperationReport(tuple(paths))
-    try:
-        result = update(project)
-        return FileOperationReport(tuple(paths), result, pending_update=not result.success)
-    except (OSError, ValueError, NotImplementedError) as exc:
-        # File change already happened; retain that fact for callers.
-        return FileOperationReport(tuple(paths), update_error=f"{type(exc).__name__}: {exc}")
+    information.invalidate(project)
+    return project.solution._events.file_changed(project, paths, auto_update)

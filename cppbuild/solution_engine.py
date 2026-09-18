@@ -3,6 +3,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from . import engine, storage
+from . import tooling, information
 from .graph import resolve
 from .models import ProjectType, SettingsError
 
@@ -14,6 +15,8 @@ def _prepare(solution):
     for node in nodes:
         if (node.settings.architecture, node.settings.configuration) != (solution._build_settings.architecture, solution._build_settings.configuration):
             raise SettingsError("Whole-solution operations require matching configuration and architecture")
+        if node.settings.tools != solution._build_settings.tools:
+            raise SettingsError("Whole-solution operations require matching ToolSettings; use individual operations for overrides")
     return roots, nodes
 
 
@@ -60,7 +63,7 @@ def _generate(solution, nodes, selected):
         lines += ['add_custom_target(cppbuild_selected',
                   '  COMMAND "${CMAKE_VS_MSBUILD_COMMAND}" ' + engine._path(sln),
                   f'  "/t:{targets}" "/p:Configuration=$<CONFIG>" "/p:Platform={solution._build_settings.architecture}"',
-                  '  /m /verbosity:minimal VERBATIM)']
+                  f'  /m:{solution._build_settings.parallel} /verbosity:minimal VERBATIM)']
     else:
         lines += ["add_custom_target(cppbuild_selected)"]
     cmake = source / "CMakeLists.txt"
@@ -74,7 +77,7 @@ def _generate(solution, nodes, selected):
     if not owner_path.exists() and build.exists() and any(build.iterdir()):
         raise SettingsError("Refusing an unowned whole build directory")
     storage.atomic_write(owner_path, storage.encoded(owner))
-    generated = engine.process(["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", solution._build_settings.architecture], solution.root)
+    generated = tooling.process(solution._build_settings, ["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", solution._build_settings.architecture], solution.root)
     processes.append(generated)
     report = engine.OperationReport(tuple(processes), (sln,) if generated.success else ())
     solution._last_update = report
@@ -118,18 +121,31 @@ def operate(solution, operation):
                     return engine.OperationReport(tuple(results))
             if operation == "clean":
                 return engine.OperationReport(tuple(results))
-        result = engine.process(["cmake", "--build", build, "--config", solution._build_settings.configuration, "--target", "cppbuild_selected"], solution.root)
+        result = tooling.process(solution._build_settings, ["cmake", "--build", build, "--config", solution._build_settings.configuration, "--target", "cppbuild_selected"], solution.root)
         results.append(result)
+        built_keys = set()
+        def capture(node):
+            if node.key in built_keys:
+                return
+            built_keys.add(node.key)
+            for child in node.dependencies:
+                capture(child)
+            _, owned_build = engine._locations(node.project, node.settings)
+            information.built(node.project, node.settings, engine._artifacts(node.project, node.settings, owned_build) if result.success else (), result.success)
+        for node in selected:
+            capture(node)
         if not result.success:
             return engine.OperationReport(tuple(results))
-        artifacts = []
+        artifacts, commands = [], []
         for node in selected:
             _, child_build = engine._locations(node.project, node.settings)
             owned = engine._artifacts(node.project, node.settings, child_build)
             artifacts.extend(owned)
             if operation == "run":
-                result = engine.run_artifact(node.project, node.settings, owned, nodes)
-                results.append(result)
-                if not result.success:
-                    break
+                commands.append(engine.run_command(node.project, node.settings, owned, nodes))
+        if operation == "run":
+            from .execution import execute
+            settings = solution._build_settings
+            return execute(commands, results, artifacts, parallel=settings.run_parallel,
+                           wait=settings.run_wait, continue_on_failure=settings.run_continue_on_failure)
         return engine.OperationReport(tuple(results), tuple(artifacts))

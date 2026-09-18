@@ -22,7 +22,7 @@ class IntegrationCandidateTests(unittest.TestCase):
             def execute(*arguments):
                 result = subprocess.run([str(a) for a in arguments], cwd=root,
                                         text=True, errors="replace", stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT)
+                                        stderr=subprocess.STDOUT, env=dict(os.environ))
                 self.assertEqual(result.returncode, 0, result.stdout)
                 return result
 

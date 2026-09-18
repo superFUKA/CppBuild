@@ -14,6 +14,8 @@ from .models import (
 )
 from . import storage
 from . import dependencies as dependency_data
+from .events import Dispatcher, operation
+from . import tooling
 
 
 def _name(value):
@@ -31,6 +33,11 @@ def _build_settings(value, seen=None):
     if id(value) in seen:
         raise SettingsError("Recursive external build settings")
     seen = seen | {id(value)}
+    if value.tools is INHERIT:
+        if isinstance(value, SolutionBuildSettings):
+            raise SettingsError("Solution tools cannot inherit")
+    else:
+        tooling.validate(value.tools)
     for key, allowed in (("configuration", {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}),
                          ("architecture", {"x64", "Win32", "ARM64"}),
                          ("cpp_standard", {17, 20, 23})):
@@ -42,18 +49,29 @@ def _build_settings(value, seen=None):
                 valid = False
             if not valid:
                 raise SettingsError(f"Unsupported {key}: {item!r}")
+    for key in ("parallel", "test_parallel") if isinstance(value, ProjectBuildSettings) else ("parallel", "run_parallel"):
+        if type(getattr(value, key)) is not int or getattr(value, key) < 1:
+            raise SettingsError(f"{key} must be positive")
+    for key in ("run_wait",) if isinstance(value, ProjectBuildSettings) else ("run_wait", "run_continue_on_failure", "test_continue_on_failure"):
+        if type(getattr(value, key)) is not bool:
+            raise SettingsError(f"{key} must be boolean")
     if isinstance(value, ProjectBuildSettings):
         if value.project_type is not None and not isinstance(value.project_type, ProjectType):
             raise SettingsError("project_type must be a ProjectType")
-        if type(value.parallel) is not int or value.parallel < 1:
-            raise SettingsError("parallel must be positive")
         _strings(value.run_arguments)
+        if value.googletest_archive is not None and (not isinstance(value.googletest_archive, str) or not value.googletest_archive or "\x00" in value.googletest_archive):
+            raise SettingsError("googletest_archive must be a local archive path")
     else:
         if any(getattr(value, k) is INHERIT for k in ("configuration", "architecture", "cpp_standard")):
             raise SettingsError("Solution has no parent to inherit from")
         if value.build_projects is not None:
             _strings(value.build_projects)
         _strings(value.run_projects)
+        if value.test_projects is not None:
+            _strings(value.test_projects)
+        for names in (value.build_projects, value.run_projects, value.test_projects):
+            if names is not None and len(set(names)) != len(names):
+                raise SettingsError("Duplicate Project selection")
         if not isinstance(value.external_build_settings, dict):
             raise SettingsError("external_build_settings must be a mapping")
         for directory, data in value.external_build_settings.items():
@@ -147,6 +165,9 @@ class ProjectSettings(_Settings):
     def reload(self):
         self.owner._check_active()
         values, revisions = self._read()
+        if hasattr(self, "_data") and self._data != values:
+            from .information import invalidate
+            invalidate(self.owner)
         self._data, self._revision = values, revisions
 
     def save(self, values):
@@ -170,6 +191,9 @@ class ProjectSettings(_Settings):
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
                    "project_headers": values.project_headers, "system_headers": values.system_headers}
         storage.atomic_write(self.path, storage.encoded(storage.envelope("project", payload)))
+        if hasattr(self, "_data") and self._data != values:
+            from .information import invalidate
+            invalidate(self.owner)
         self._data = values
         self._revision = {p: storage.digest(p) for p in [self.path, *paths]}
         return ChangeReport(tuple(str(p) for p in [self.path, *paths]))
@@ -264,10 +288,19 @@ class SolutionSettings(_Settings):
             roots.add(root)
         if values.main_project is not None and (not isinstance(values.main_project, str) or values.main_project not in values.projects):
             raise SettingsError("main_project must refer to a member")
+        if not isinstance(values.file_templates, dict):
+            raise SettingsError("file_templates must be a mapping")
+        from .templates import material_path
+        for name, filename in values.file_templates.items():
+            _name(name)
+            if not isinstance(filename, str):
+                raise SettingsError("Expected a material path")
+            material_path(self.owner, filename)
 
     def _read(self):
         raw = storage.manifest(self.path, "solution")
-        storage.object_fields(raw, {"name", "projects", "main_project"})
+        raw.setdefault("file_templates", {})
+        storage.object_fields(raw, {"name", "projects", "main_project", "file_templates"})
         values = SolutionSettingsData(**raw)
         self._validate(values)
         return values
@@ -283,6 +316,9 @@ class SolutionSettings(_Settings):
             loaded[name] = project.settings._read()
             projects[name] = project
         for name, project in projects.items():
+            if hasattr(project.settings, "_data") and project.settings._data != loaded[name][0]:
+                from .information import invalidate
+                invalidate(project)
             project.settings._data, project.settings._revision = loaded[name]
         self.owner._projects = projects
         self._data = values
@@ -303,6 +339,24 @@ class SolutionSettings(_Settings):
         self._revision = {self.path: storage.digest(self.path)}
         return ChangeReport((str(self.path),))
 
+    def set_file_template(self, name, template_file):
+        from .templates import material_path
+        _name(name)
+        path = material_path(self.owner, template_file)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        values = self.get()
+        values.file_templates[name] = path.relative_to(self.owner.root).as_posix()
+        return self.save(values)
+
+    def file_templates(self):
+        return self.get().file_templates
+
+    def remove_file_template(self, name):
+        values = self.get()
+        del values.file_templates[name]
+        return self.save(values)
+
 
 class Project:
     def __init__(self, solution, root, name):
@@ -310,6 +364,11 @@ class Project:
         self.settings = ProjectSettings(self)
         self._build_settings = ProjectBuildSettings()
         self._last_update = None
+        self._last_operation = None
+        self._file_revision = 0
+        self._known_files, self._known_artifacts = (), ()
+        self._generation_signature = self._build_signature = None
+        self._generation_state = self._build_state = "unknown"
 
     def _check_active(self):
         if self.solution._projects.get(self.name) is not self:
@@ -327,9 +386,9 @@ class Project:
         values = deepcopy(self._build_settings)
         if requested_type is not None:
             values.project_type = requested_type
-        for key in ("configuration", "architecture", "cpp_standard"):
+        for key in ("configuration", "architecture", "cpp_standard", "tools"):
             if getattr(values, key) is INHERIT:
-                setattr(values, key, getattr(self.solution._build_settings, key))
+                setattr(values, key, deepcopy(getattr(self.solution._build_settings, key)))
         if values.project_type is None:
             if len(self.settings._data.types) != 1:
                 raise SettingsError("Select project_type explicitly for a multi-type Project")
@@ -338,40 +397,57 @@ class Project:
             raise SettingsError("Selected type is not supported by the Project")
         return values
 
+    @operation
     def update(self):
         from .engine import update
         return update(self)
 
+    @operation
     def build(self):
         from .engine import operate
         return operate(self, "build")
 
+    @operation
     def clean(self):
         from .engine import operate
         return operate(self, "clean")
 
+    @operation
     def rebuild(self):
         from .engine import operate
         return operate(self, "rebuild")
 
+    @operation
     def run(self):
         from .engine import operate
         return operate(self, "run")
 
+    @operation
+    def test(self):
+        from .testing import project_test
+        return project_test(self)
+
     def add_file(self, destination, *, content=None, template_name=None, replacements=None, auto_update=True):
         from .engine import file_path, file_report
+        self.solution._events.check_file_change()
         if template_name is not None:
-            raise NotImplementedError("File templates are scheduled for M6")
-        if not isinstance(content, str) or replacements is not None:
-            raise SettingsError("Pass text content; replacements require a template")
+            if content is not None:
+                raise SettingsError("content and template_name are mutually exclusive")
+            from .templates import expand
+            data = expand(self, template_name, replacements)
+        else:
+            if not isinstance(content, str) or replacements is not None:
+                raise SettingsError("Pass text content; replacements require a template")
+            data = content.encode("utf-8")
         path = file_path(self, destination)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("x", encoding="utf-8", newline="") as stream:
-            stream.write(content)
+        with path.open("xb") as stream:
+            stream.write(data)
         return file_report(self, [path], auto_update)
 
     def remove_file(self, path, *, auto_update=True):
         from .engine import file_path, file_report
+        self.solution._events.check_file_change()
         path = file_path(self, path)
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -380,6 +456,7 @@ class Project:
 
     def move_file(self, source, destination, *, auto_update=True):
         from .engine import file_path, file_report
+        self.solution._events.check_file_change()
         source, destination = file_path(self, source), file_path(self, destination)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -392,6 +469,10 @@ class Project:
         source.rename(destination)
         return file_report(self, [source, destination], auto_update)
 
+    def check_environment(self):
+        from .environment import check_owner
+        return check_owner(self)
+
 
 class Solution:
     def __init__(self, root):
@@ -400,26 +481,38 @@ class Solution:
         self.settings = SolutionSettings(self)
         self._build_settings = SolutionBuildSettings()
         self._last_update = None
+        self._last_operation = None
+        self._events = Dispatcher(self)
 
+    @operation
     def update(self):
         from .solution_engine import update
         return update(self)
 
+    @operation
     def build(self):
         from .solution_engine import operate
         return operate(self, "build")
 
+    @operation
     def clean(self):
         from .solution_engine import operate
         return operate(self, "clean")
 
+    @operation
     def rebuild(self):
         from .solution_engine import operate
         return operate(self, "rebuild")
 
+    @operation
     def run(self):
         from .solution_engine import operate
         return operate(self, "run")
+
+    @operation
+    def test(self):
+        from .testing import solution_test
+        return solution_test(self)
 
     def _check_active(self):
         pass
@@ -427,7 +520,8 @@ class Solution:
     @classmethod
     def create(cls, destination_directory, solution_name, *, template=None):
         if template is not None:
-            raise NotImplementedError("Solution templates are scheduled for M6")
+            from .templates import instantiate
+            return instantiate(template, destination_directory, solution_name)
         _name(solution_name)
         instance = cls(destination_directory)
         with storage.write_lock(instance.settings.path.parent):
@@ -450,6 +544,24 @@ class Solution:
 
     def projects(self):
         return list(self._projects.values())
+
+    def create_file_template(self, name, source_file, *, replacements=None):
+        from .templates import create_file
+        return create_file(self, name, source_file, replacements)
+
+    def on(self, event, callback):
+        return self._events.on(event, callback)
+
+    def off(self, registration_id):
+        return self._events.off(registration_id)
+
+    def info(self):
+        from .information import snapshot
+        return snapshot(self)
+
+    def check_environment(self):
+        from .environment import check_owner
+        return check_owner(self)
 
     def add_project(self, directory, name, project_type, settings=None):
         _name(name)
@@ -501,7 +613,7 @@ class Solution:
         if not isinstance(values, SolutionBuildSettings):
             raise SettingsError("Expected SolutionBuildSettings")
         _build_settings(values)
-        for name in [*(values.build_projects or []), *values.run_projects]:
+        for name in [*(values.build_projects or []), *values.run_projects, *(values.test_projects or [])]:
             if name not in self._projects:
                 raise SettingsError(f"Unknown Project: {name}")
         self._build_settings = deepcopy(values)

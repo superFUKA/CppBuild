@@ -6,6 +6,8 @@
 
 ## 今回の進捗
 
+2026-09-18 M6実装補足：テンプレート参照はPath、置換は本文の単回置換、登録はSolution内共有素材を対象とした。イベントは登録順・同一登録の再帰抑止・Project別更新集約、失敗時の部分結果を実装。環境診断は実操作とToolSettingsを共用し、infoは外部走査をせず観測済み状態を返す。具体的な規則・制約は[API設計](API_DESIGN.md)のM6実装補足を参照。以下の設計時点の未確定事項と実装選択を区別する。GoogleTestのオンライン取得は承認後に成功し、通信保留は解消した。
+
 実装開始後：M1・M2を実装し、管理設定・独立ProjectのVS2022生成・実ビルドを25件の自動テストで確認した。
 全体統合方式と共有依存のcleanは未実装。詳細な制約・実測結果は[実装記録](IMPLEMENTATION_STATUS.md)参照。
 以下の箇条書きは設計整理時点の履歴。
@@ -57,6 +59,14 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 4. 生成後にファイルを追加し、.vcxproj.filters、別ツリーの未反映状態、失敗結果を検証する。静的／共有・GoogleTestはこの基礎の後に進める。
 
 ## 検証状況
+
+2026-09-18 M5実装時の具体化・制約：
+
+- GoogleTest 1.14.0 ZIPをSHA256固定で使用。ローカルZIP経由のFetchContentを検証し、オンライン取得はユーザーの許可後に再確認する。初回取得ソース・バイナリは各Projectの所有ツリー内に置き、独立Project間のキャッシュ共用は行わない。
+- MSVCの既定DLL CRTに合わせてgtest_force_shared_crtを有効化。CRT選択を公開設定として追加する場合は両者の整合を再検証する。
+- CMake 4.2のGoogleTest列挙はJSON出力に絶対パスを渡すため、日本語パスとGoogleTestのWindows narrow fopenの組合せで失敗した。4.2以降では列挙だけ`--gtest_output=`を指定し、標準出力から列挙するCMake標準のフォールバックを使う。実行結果はCTest自身が生成するJUnitを読む。
+- 非同期runは監視用スレッドを保持する。デタッチ・キャンセル・実行中のclean/rebuild同期は今回の実装対象外。利用側はRunReport.wait()後に成果物変更を行う。
+- 今回の具体化は実装選択であり、設計の未合意事項を一括して確認済みへ変更するものではない。
 
 - 実施：現行文書の名称・参照リンク・API一覧・旧方針残存を確認。CMake公式資料でVS2022 generator、source/build tree、構成選択、source_group、File APIを調査。
 - 実施：GoogleTest公式のCMake導入例、CMakeのGoogleTest・FetchContent・CTest公式資料を確認。ダウンロードや実行は行っていない。
