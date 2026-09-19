@@ -2,6 +2,7 @@ include README.md CONTRIBUTING.md LICENSE
 recursive-include cppbuild *.py
 recursive-include examples *.py
 recursive-include tests *.py
+recursive-include usage_tests *.py *.md
 recursive-include deliverables *.md
 prune .test-work
 prune build

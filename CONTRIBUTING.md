@@ -18,6 +18,8 @@ $env:CPPBUILD_TEST_GTEST_ARCHIVE = 'C:/archives/v1.14.0.zip'
 
 ZIPはGoogleTest 1.14.0の固定アーカイブです。オンライン取得の確認は新しい出力先を指定して`python -m examples.complete_workflow .test-work/online-demo`で行います。
 
+公開APIからC++ Solutionを作成し、実ビルド・実行まで確認する6シナリオは[利用検証手順](usage_tests/README.md)を参照してください。結果と生成物は`.test-work/`へ保存し、コミットにはランナー・手順・検証結果の要約だけを含めます。
+
 変更時は関連するテストを実行し、実行条件・成功／失敗・skipを記録してください。公開APIや制約を変えた場合は`deliverables/`の対応資料も更新します。生成したプロジェクトや取得したGoogleTestをコミットしないでください。
 
 ## 配布物の確認

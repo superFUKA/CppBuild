@@ -41,6 +41,7 @@ python -m examples.complete_workflow .test-work/workflow
 ## 開発と資料
 
 - [開発・貢献手順](CONTRIBUTING.md)
+- [公開APIによるC++利用検証](usage_tests/README.md)
 - [API設計](deliverables/API_DESIGN.md)
 - [資料一覧](deliverables/DELIVERABLES.md)
 - [マイルストーン](deliverables/MILESTONES.md)
