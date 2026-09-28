@@ -72,3 +72,33 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 - 実施：GoogleTest公式のCMake導入例、CMakeのGoogleTest・FetchContent・CTest公式資料を確認。ダウンロードや実行は行っていない。
 - 未実施：ライブラリ実装、自動テスト、CMake生成・C++実ビルド、VS2022での表示確認、MSBuild cleanの所有範囲検証。
 - 公式機能の存在と、このライブラリの設計が動くことは別。推奨案は利用上の影響を確認してから実装する。
+
+## 2026-09-28：Projectの配置変更の調査
+
+同一Solution内でProject名を維持したフォルダー移動を調査。専用APIは未実装で、公開APIだけでは既存Projectの登録パスを変更できない。`solution.settings.save()`はprojectsの変更を拒否し、`add_project()`は既存の個別管理ファイルを拒否するため、remove/addによる再登録も代替にならない。
+
+現実装で手動移行する場合の必要作業（移行の一連の実VS試験は未実施）：
+
+1. ビルド・実行・設定更新を止め、設定をバックアップする。移動先は同じSolutionの配下で、Solution直下そのもの・全体.cppbuild内・他Projectとの同一または入れ子配置を避ける。
+2. ソースと個別`.cppbuild/project.json`・`.cppbuild/types`等の保存設定を一緒に移動する。全体`<Solution>/.cppbuild/project.json`の`data.projects[Project名]`を新しいSolution相対パスに修正する。現在の全体設定ファイル名はsolution.jsonではない。
+3. 移動したProjectの`.cppbuild/build`は旧絶対パスの所有マーカーを持つため、管理範囲外へ退避するなどして再生成させる。全種類・全アーキテクチャが対象。`.cppbuild/generated`も再生成対象として退避できる。管理設定を含む`.cppbuild`全体は削除しない。clean/rebuildは生成を先行させるため所有不一致の解消には使えない。
+4. Project内の相対ソース・include・PCHは内部配置を維持すれば変更不要。絶対パスやProject外への相対参照は点検し、CMakePackage/CMakeSource/ImportedLibrary等の参照先を維持する。link_solutionは登録時に絶対パスを保存する。外部データを手動指定した場合の相対solution_directoryや、非保存のgoogletest_archive等にも注意する。
+5. Solutionを再openするかsettings.reloadし、get_projectで移動後のオブジェクトを取り直す。移動対象は新オブジェクトになるため個別の非保存ビルド設定を再設定する。再openなら全体設定・各Projectの非保存設定・イベント登録も再設定する。
+6. solution.updateで依存利用側と全体.slnを含め再生成し、必要構成のbuild/testを確認する。個別updateだけでは利用側・全体.slnは更新されない。内部依存はProject名参照なので名前を維持すれば付け替え不要。他Solutionから利用されている場合はそちらも再生成する。パスを直接記した利用スクリプトや外部CMakeは別途点検する。
+
+一時データで確認：公開saveのパス変更拒否、移動後の旧登録でopen失敗、登録JSON修正後のreloadと内部依存解決、旧Projectオブジェクトの無効化、個別非保存設定の初期化、旧所有マーカーによるupdate拒否、remove後の既存設定再add拒否。所有マーカーは実装と同じ形式で作成し、CMakeは起動していない。
+
+今後APIを追加する場合は、実フォルダー移動と移動済み参照の更新の責務、失敗時の復旧、外部参照の維持、キャッシュの退避、非保存設定の引き継ぎを設計する。API名・仕様の合意や実装は今回の調査に含めない。
+
+## 2026-09-28：Project移動APIの実装
+
+上記調査後の追加依頼に基づき、`solution.move_project(name, destination, *, auto_update=True)`を実装した。先行する「専用API未実装」「手動修正」の記録は調査時点の状態。既存のファイル操作に合わせFileOperationReportを返す。設定保存後の再生成失敗は移動完了と区別し、pending_update/update_errorで表す。
+
+- 同じSolution内の実フォルダー移動を対象とし、名前と既存Project/Settingsインスタンスを保持する。移動済み参照の修復・別Solutionへの移管・名前変更は対象外。
+- 移動前に保存設定の競合、配置とリンク、管理データの妥当性を検査。Project内部を指す型付きパスを新位置へ、外部への相対パスを元の参照先を維持するよう変更する。同じSolution内の参照元設定も補正する。任意文字列や外部Solutionの設定は自動変更しない。
+- 全種類・全アーキテクチャのgenerated/buildを全体.cppbuild/relocations/<id>へ退避する。管理設定とソースは保持し、退避先は結果のchanged_pathsに含む。退避キャッシュは自動削除しない。生成物を通常の素材として直接参照する独自設定の継続は保証せず、再ビルドを要する。
+- 設定・全体操作ロックを取得し、検出した個別操作ロック・未完了run・イベントコールバック中の呼び出しを拒否する。同時操作の完全な同期機構ではないため、他プロセス／スレッドの操作と非同期runは停止・完了させて使う。
+- renameや設定保存の例外では変更済み設定・移動・キャッシュを逆順で復元する。復旧I/Oも失敗した場合は現在位置・退避先を例外に含める。プロセス強制終了・停電まで保証する永続トランザクションではない。
+- 個別の非保存ビルド設定とイベント登録を保持する。パス補正後もビルド設定は保存しない。移動後のキャッシュ観測状態はstaleにし、自動更新ではsolution.updateで利用側と全体.slnを再生成する。他Solutionの利用側のupdateは呼び出し側の責務。
+
+検証結果・残作業はIMPLEMENTATION_STATUS.mdの同日実装記録を参照。

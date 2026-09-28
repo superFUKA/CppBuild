@@ -25,6 +25,7 @@
 - Solution.openには全体の.cppbuildを渡し、所属Projectの設定も自動で読む。利用側に再登録を求めない。
 - 全体設定・共有素材はSolution配下、個別設定は各Project配下。全体設定の入口を旧project.jsonからsolution.jsonへ変更する案は未合意。共有素材は.cppbuild/templates/。
 - remove_projectは登録解除であり実ファイルは残す。主Project・依存参照のあるProjectの解除を制限する。
+- 2026-09-28追加：move_projectで同じSolution内のProjectフォルダーと登録先をまとめて移動する。既存のauto_update・FileOperationReport形式に揃え、管理設定・依存関係・非保存設定を保持し、パス補正と生成物再生成を扱う。具体的な範囲・制約はAPI_DESIGN.mdを参照。
 
 ## 2. 依存・リンク
 

@@ -9,6 +9,7 @@
 実装再開時の追加合意：Projectごとに成果物を所有し、全体／個別の呼び出しでは共用する。
 必要な依存先は先にビルドし、相手の成果物を参照する。全体用の複製は作らない。
 個別cleanはそのProjectだけを対象にし、他Project・依存先の成果物を保護する。
+2026-09-28実装：Project移動時は専用move_projectが当該Projectのgenerated/buildを全体`.cppbuild/relocations/<id>/`へ退避する。旧絶対パスの所有マーカーやCMakeキャッシュを新位置で流用せず、管理設定とソースを移してから全体updateで個別生成物・利用側・全体.slnを再生成する。これはcleanの対象範囲を変更するものではない。詳細と結果形式はAPI_DESIGN.mdを参照。
 M3aで検証したinclude_external_msprojectと全体.sln向けMSBuildのCMake制御を具体化する。
 
 各Projectに単独で構成・生成できるCMake入口と専用ビルドディレクトリ・キャッシュを持たせ、project.updateはその生成環境だけを再構成・再生成する。対象ソースの一覧とフィルターの反映を主目的とする。この操作がCMakeの標準操作で実現できることを説明し、ユーザーから問題ない旨を確認した。

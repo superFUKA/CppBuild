@@ -49,7 +49,7 @@ class OperationReport:
 @dataclass(frozen=True)
 class FileOperationReport:
     changed_paths: tuple[Path, ...]
-    update: UpdateReport | None = None
+    update: UpdateReport | OperationReport | None = None
     update_error: str | None = None
     pending_update: bool = True
     event_errors: tuple[str, ...] = ()

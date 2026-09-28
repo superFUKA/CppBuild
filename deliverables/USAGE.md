@@ -57,6 +57,27 @@ tests.set_build_settings(ProjectBuildSettings(
 
 `solution.check_environment()`は選択ツールでC++の構成・ビルドを行い、不足情報を返す。GoogleTestのオンライン接続性はこの診断で確認せず、初回のupdate/build/testで確認する。通信失敗時はProcessReport.outputに取得URLとCMakeのエラーが残る。
 
+## Projectの移動
+
+```python
+report = solution.move_project("Library", "libraries/Library")
+if not report.success:
+    print(report.update_error)
+    if report.update is not None:
+        for process in report.update.processes:
+            print(process.output)
+
+# CMakeへの反映を後でまとめる場合
+report = solution.move_project("App", "applications/App", auto_update=False)
+updated = solution.update()
+```
+
+移動先はSolutionルート基準で、まだ存在しないフォルダーを指定する。実フォルダーと登録先を一緒に移し、内部依存・既存Projectオブジェクト・非保存設定を保持する。既定では全体.slnと依存利用側も再生成するが、コンパイルはしない。必要に応じてbuild/run/testを実行する。
+
+旧キャッシュは全体`.cppbuild/relocations/<id>/`へ退避する。退避パスはreport.changed_pathsにも含む。管理設定とソースは移動先に保持される。再生成失敗時も移動自体は完了しているため、原因を直してsolution.updateを再実行する。移動前から実フォルダーが存在しない場合の登録修復には対応しない。
+
+他のビルド・設定操作を停止し、非同期runはwaitしてから呼び出す。他Solutionの利用側は別途updateする。利用スクリプトやC++本文、任意の引数・環境変数に埋め込んだパスは必要に応じて修正する。リンクやジャンクションを含む移動は拒否する。
+
 ## 自動テスト
 
 ```powershell

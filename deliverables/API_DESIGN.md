@@ -76,6 +76,13 @@ AppのcleanでMath・Toolを削除しない。この合意は以下の全体統�
 | solution.get_project(name) / solution.projects() | 個別取得／一覧 |
 | solution.add_project(directory, name, project_type, settings=None) | 名前・種類を直接指定しProjectを追加。settings省略時は既定設定 |
 | solution.remove_project(name) | 所属登録のみ解除し、ソース・個別設定は残す |
+| solution.move_project(name, destination, *, auto_update=True) | 同一Solution内でProjectフォルダーと登録先を移動。FileOperationReportを返す |
+
+2026-09-28実装：`move_project`のdestinationはSolutionルート基準（配下の絶対パスも可）。既存出力先・管理領域・他Projectや移動元との同一／入れ子配置・ファイルシステムリンクを拒否する。Project名、主Project、内部依存ID、既存Project/Settingsオブジェクト、非保存設定、イベント登録を保持する。管理データ内の型付きパスとGoogleTest ZIP・明示ツールパスを補正する。元から存在しないProjectの移動済みパス修復、別Solutionへの移管、名前変更は含めない。
+
+移動したProjectの全種類・全アーキテクチャのgenerated/buildを全体`.cppbuild/relocations/<id>/`へ退避し、個別管理設定を保持する。保存やrenameの失敗は設定・ディレクトリ・キャッシュを復元して例外を送出する（プロセス強制終了・復旧I/O自体の失敗までの原子性は保証しない）。他操作を停止して呼び出す。検出した設定競合・実行中run・操作ロック・コールバック内呼び出しは拒否する。
+
+既存のファイル操作と同じ`FileOperationReport`を返す。changed_pathsは旧／新Projectパス、更新設定、キャッシュ退避先を含む。auto_update=Trueは移動確定後にsolution.updateを呼び、updateには全体のOperationReportが入る。再生成失敗は移動を取り消さず、success=False・pending_update=Trueとupdateまたはupdate_errorで通知する。FalseはCMakeを実行せずsuccess=True・pending_update=True。移動自体は設定操作としてfile_changedを発火せず、自動更新時は既存のbefore_update/after_updateを発火する。利用スクリプト・C++本文・任意の引数や環境変数・他Solutionの設定は書き換えない。
 
 基本操作は確認済み。空Solutionのmain_projectはNone。最初の追加で自動設定し、以後はsolution.settingsで変更する。テンプレート指定時は構成・主Projectを引き継ぐ。Solution自体の種類引数は不要。
 

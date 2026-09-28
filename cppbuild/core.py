@@ -178,25 +178,30 @@ class ProjectSettings(_Settings):
             self._assert_unchanged()
             return self._publish(values)
 
-    def _publish(self, values):
-        paths, refs = [], {}
+    def _documents(self, values):
+        documents, refs = {}, {}
         for kind, data in values.types.items():
             content = storage.encoded(storage.envelope(kind.value, asdict(data)))
             filename = f"{kind.value}-{hashlib.sha256(content).hexdigest()}.json"
             path = self.path.parent / "types" / filename
-            storage.atomic_write(path, content)
             refs[kind.value] = filename
-            paths.append(path)
+            documents[path] = content
         payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
                    "project_headers": values.project_headers, "system_headers": values.system_headers}
-        storage.atomic_write(self.path, storage.encoded(storage.envelope("project", payload)))
+        documents[self.path] = storage.encoded(storage.envelope("project", payload))
+        return documents
+
+    def _publish(self, values):
+        documents = self._documents(values)
+        for path, content in documents.items():
+            storage.atomic_write(path, content)
         if hasattr(self, "_data") and self._data != values:
             from .information import invalidate
             invalidate(self.owner)
         self._data = values
-        self._revision = {p: storage.digest(p) for p in [self.path, *paths]}
-        return ChangeReport(tuple(str(p) for p in [self.path, *paths]))
+        self._revision = {p: storage.digest(p) for p in documents}
+        return ChangeReport(tuple(str(p) for p in [self.path, *(p for p in documents if p != self.path)]))
 
     def link_project(self, other_project, link_type):
         self.owner._check_active()
@@ -328,7 +333,7 @@ class SolutionSettings(_Settings):
         values = deepcopy(values)
         self._validate(values)
         if values.projects != self._data.projects:
-            raise SettingsError("Use add_project/remove_project to change membership")
+            raise SettingsError("Use add_project/remove_project/move_project to change membership")
         with storage.write_lock(self.path.parent):
             self._assert_unchanged()
             return self._publish(values)
@@ -608,6 +613,10 @@ class Solution:
             report = self.settings._publish(values)
             del self._projects[name]
         return report
+
+    def move_project(self, name, destination, *, auto_update=True):
+        from .relocation import move_project
+        return move_project(self, name, destination, auto_update=auto_update)
 
     def set_build_settings(self, values):
         if not isinstance(values, SolutionBuildSettings):

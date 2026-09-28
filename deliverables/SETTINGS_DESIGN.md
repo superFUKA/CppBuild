@@ -38,6 +38,8 @@ settings.get/save/reloadは保存対象の管理設定だけを扱う。保存�
 
 Solution.openは管理設定と所属Projectを読む。必要な実行用設定は利用側から改めて渡す。型の明示的な既定値で満たせない必須値は操作前に診断し、古いCMakeCacheから推測して復元しない。未設定／設定解除のAPIは項目設計と合わせて決める。
 
+2026-09-28実装：`solution.move_project`は全体project.jsonのprojectsと、必要な個別・種類別設定のパスを保存し直す。移動対象のProject/Settingsオブジェクトを保持するため、非保存ビルド設定は初期化しない。移動対象内部の参照は新位置へ、外部相対参照は同じ参照先を維持するよう補正し、同一Solutionの他Projectに保存された型付きパスも対象とする。非保存のGoogleTest ZIPと明示ツールパスも補正するがJSONには保存しない。任意のrun_arguments・コンパイル定義・環境変数やファイル本文に埋め込まれたパスは解析しない。
+
 ## 3. Projectから親Solutionへの継承（暫定採用）
 
 ユーザーの「親に従う」案は、全体構成と個別構成の指定を揃えるために有効。親は所属Solutionとし、依存先Projectや呼び出し時の別Solutionを親にしない。独立CMake構成間の継承なので、ライブラリが解決した値を個別CMakeへ渡す。
