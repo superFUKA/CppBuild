@@ -151,7 +151,7 @@ class ProjectSettings(_Settings):
             except ValueError as exc:
                 raise SettingsError(f"Unsupported project type: {key}") from exc
             path = storage.contained(self.path.parent / "types", relative)
-            data = storage.manifest(path, key)
+            data = storage.manifest(path, key, root=self.owner.root)
             data.setdefault("public_definitions", [])
             data.setdefault("include_directories", ["include"])
             storage.object_fields(data, {"compile_definitions", "public_definitions", "include_directories"})
@@ -169,7 +169,10 @@ class ProjectSettings(_Settings):
     def reload(self):
         self.owner._check_active()
         values, revisions = self._read()
-        if values.guid is None or any(isinstance(d, Dependency) and d.solution_directory is not None for d in values.dependencies.values()):
+        legacy_paths = any(storage.needs_migration(p) for p in revisions)
+        legacy_links = any(isinstance(d, Dependency) and d.solution_directory is not None
+                           for d in values.dependencies.values())
+        if values.guid is None or legacy_paths or legacy_links:
             self.owner.solution.settings.reload()
             return
         if hasattr(self, "_data") and self._data != values:
@@ -189,7 +192,7 @@ class ProjectSettings(_Settings):
     def _documents(self, values):
         documents, refs = {}, {}
         for kind, data in values.types.items():
-            content = storage.encoded(storage.envelope(kind.value, asdict(data)))
+            content = storage.document(self.path.parent / "types" / "settings.json", kind.value, asdict(data))
             filename = f"{kind.value}-{hashlib.sha256(content).hexdigest()}.json"
             path = self.path.parent / "types" / filename
             refs[kind.value] = filename
@@ -197,10 +200,13 @@ class ProjectSettings(_Settings):
         payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
                    "project_headers": values.project_headers, "system_headers": values.system_headers, "guid": values.guid}
-        documents[self.path] = storage.encoded(storage.envelope("project", payload))
+        documents[self.path] = storage.document(self.path, "project", payload)
         return documents
 
     def _publish(self, values):
+        from .paths import project_values, rebase
+        values = deepcopy(values)
+        project_values(values, lambda value: rebase(value, self.owner.root, self.owner.root))
         documents = self._documents(values)
         for path, content in documents.items():
             storage.atomic_write(path, content)
@@ -368,10 +374,13 @@ class SolutionSettings(_Settings):
             return self._publish(values)
 
     def _publish(self, values):
-        storage.atomic_write(self.path, storage.encoded(storage.envelope("solution", asdict(values))))
+        storage.atomic_write(self.path, self._document(values))
         self._data = values
         self._revision = {self.path: storage.digest(self.path)}
         return ChangeReport((str(self.path),))
+
+    def _document(self, values):
+        return storage.document(self.path, "solution", asdict(values))
 
     def set_file_template(self, name, template_file):
         from .templates import material_path

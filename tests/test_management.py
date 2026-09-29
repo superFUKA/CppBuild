@@ -148,7 +148,7 @@ class ManagementTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
                 app.set_build_settings(ProjectBuildSettings(configuration=invalid))
         raw = json.loads(app.settings.path.read_text())
-        raw["schema_version"] = 2
+        raw["schema_version"] = 999
         app.settings.path.write_text(json.dumps(raw))
         with self.assertRaises(SettingsError):
             app.settings.reload()

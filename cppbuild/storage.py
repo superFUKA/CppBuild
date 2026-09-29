@@ -96,12 +96,22 @@ def object_fields(value, required):
         raise SettingsError(f"Expected fields: {sorted(required)}")
 
 
-def manifest(path, kind):
+def manifest(path, kind, *, root=None):
     result = read_json(path)
     object_fields(result, {"schema_version", "kind", "data"})
-    if type(result["schema_version"]) is not int or result["schema_version"] != 1 or result["kind"] != kind:
+    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2} or result["kind"] != kind:
         raise SettingsError(f"Unsupported schema or document kind: {path}")
-    return result["data"]
+    from .paths import decode
+    return decode(path, kind, result["data"], result["schema_version"], root=root)
+
+
+def document(path, kind, data):
+    from .paths import encode
+    return encoded({"schema_version": 2, "kind": kind, "data": encode(path, kind, data)})
+
+
+def needs_migration(path):
+    return read_json(path).get("schema_version") == 1
 
 
 def envelope(kind, data):

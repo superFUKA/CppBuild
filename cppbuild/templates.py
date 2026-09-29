@@ -165,7 +165,28 @@ def _snapshot(solution, destination, name, *, template):
                                  for key, value in values.file_templates.items()}
         clone.settings.save(cloned)
         if template:
-            storage.atomic_write(stage / ".cppbuild/template.json", storage.encoded(storage.envelope("solution_template", {})))
+            marker = stage / ".cppbuild/template.json"
+            storage.atomic_write(marker, storage.document(marker, "solution_template", {}))
+        # Serialize external paths for the final location, not the temporary stage.
+        from .core import Project
+        from .paths import project_values, relative
+        final_owner = Solution(destination)
+        final_values = clone.settings.get()
+        for reference in final_values.references.values():
+            reference.solution_directory = relative(destination, (stage / reference.solution_directory).resolve())
+        for project in clone.projects():
+            final_root = destination / project.root.relative_to(stage)
+            data = project.settings.get()
+            def final_path(value):
+                absolute = (project.root / value).resolve()
+                if absolute.is_relative_to(stage):
+                    absolute = destination / absolute.relative_to(stage)
+                return relative(final_root, absolute)
+            project_values(data, final_path)
+            shadow = Project(final_owner, final_root, project.name)
+            for path, content in shadow.settings._documents(data).items():
+                storage.atomic_write(stage / path.relative_to(destination), content)
+        storage.atomic_write(clone.settings.path, final_owner.settings._document(final_values))
         stage.rename(destination)
     return destination
 

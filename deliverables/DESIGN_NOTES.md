@@ -80,9 +80,9 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 現実装で手動移行する場合の必要作業（移行の一連の実VS試験は未実施）：
 
 1. ビルド・実行・設定更新を止め、設定をバックアップする。移動先は同じSolutionの配下で、Solution直下そのもの・全体.cppbuild内・他Projectとの同一または入れ子配置を避ける。
-2. ソースと個別`.cppbuild/project.json`・`.cppbuild/types`等の保存設定を一緒に移動する。全体`<Solution>/.cppbuild/project.json`の`data.projects[Project名]`を新しいSolution相対パスに修正する。現在の全体設定ファイル名はsolution.jsonではない。
+2. ソースと個別`.cppbuild/project.json`・`.cppbuild/types`等の保存設定を一緒に移動する。全体`<Solution>/.cppbuild/project.json`の`data.projects[Project名]`を新しい配置へ修正する。schema_version=1はSolutionルート相対、2はこの設定ファイルの親ディレクトリ相対。現在の全体設定ファイル名はsolution.jsonではない。
 3. 移動したProjectの`.cppbuild/build`は旧絶対パスの所有マーカーを持つため、管理範囲外へ退避するなどして再生成させる。全種類・全アーキテクチャが対象。`.cppbuild/generated`も再生成対象として退避できる。管理設定を含む`.cppbuild`全体は削除しない。clean/rebuildは生成を先行させるため所有不一致の解消には使えない。
-4. Project内の相対ソース・include・PCHは内部配置を維持すれば変更不要。絶対パスやProject外への相対参照は点検し、CMakePackage/CMakeSource/ImportedLibrary等の参照先を維持する。link_solutionは登録時に絶対パスを保存する。外部データを手動指定した場合の相対solution_directoryや、非保存のgoogletest_archive等にも注意する。
+4. Project内の相対ソース・include・PCHは内部配置を維持すれば変更不要。Project外への相対参照は点検し、CMakePackage/CMakeSource/ImportedLibrary等の参照先を維持する。現行link_solutionは所属Solutionの参照一覧へ設定ファイル基準の相対パスを保存する。非保存のgoogletest_archive等の実行時パスも配置に合わせる。
 5. Solutionを再openするかsettings.reloadし、get_projectで移動後のオブジェクトを取り直す。移動対象は新オブジェクトになるため個別の非保存ビルド設定を再設定する。再openなら全体設定・各Projectの非保存設定・イベント登録も再設定する。
 6. solution.updateで依存利用側と全体.slnを含め再生成し、必要構成のbuild/testを確認する。個別updateだけでは利用側・全体.slnは更新されない。内部依存はProject名参照なので名前を維持すれば付け替え不要。他Solutionから利用されている場合はそちらも再生成する。パスを直接記した利用スクリプトや外部CMakeは別途点検する。
 
@@ -118,3 +118,10 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 - 旧設定の移行はopen/reload時に行うため、旧形式については読み込み時にも保存が発生する。循環依存で移行が再帰し続けないよう、外部側のGUID付与はリンクの移行と分離する。循環は依存解決時に診断する。旧外部リンク先が読めない場合は利用側の移行も失敗する。
 - 参照一覧と利用元の更新にはSolutionおよび全所属Projectの設定ロック・指紋を使用し、古い利用元一覧で共有参照を消さないようにする。複数ファイル公開の通常失敗では復元する。強制終了後の自動復旧は含めない。
 - 参照名は全体.slnのProject表示名には使用しない。既存のSolution名によるフォルダー表示を維持し、別名参照でもProjectを二重表示しない。
+
+## 2026-09-30：設定ファイル基準のパス保存
+
+- schema_version=2を導入し、保存された型付きパスを設定ファイルの親ディレクトリ基準に統一する。APIのSolution／Projectルート基準は変えず、入出力時に変換する。旧版の基準を誤解釈しないようschema_version=1を読み分けて移行する。
+- 絶対パスを保存する旧方針を変更。外部依存も相対化し、別ドライブ／別共有で表現できない場合はエラー。GUIDだけで旧絶対パスの移設先を推測することはしない。旧設定は移設前に移行する。
+- テンプレートの一時作成先と最終公開先では外部対象までの相対距離が異なるため、公開先基準の文書を作ってからrenameする。内部コピー対象は新しい内部配置を参照し、外部対象は同じ対象を維持する。
+- 移設後の実試験でMSBuildが全体.sln外の子Projectへ構成を引き継がない問題を検出。ローカルVS2022のMicrosoft.Common.CurrentVersion.targetsにあるShouldUnsetParentConfigurationAndPlatformの既定動作を確認し、APIの全体ビルドではfalseを指定して修正。外部CMakeソースを含むDebug/Releaseの全体・個別ビルドで回帰確認する。

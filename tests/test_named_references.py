@@ -27,6 +27,9 @@ class NamedReferenceTests(unittest.TestCase):
     def link(self, project=None, **kwargs):
         return (project or self.app).settings.link_solution(self.config, T.STATIC_LIBRARY, **kwargs)
 
+    def legacy(self, project):
+        return storage.envelope("project", storage.manifest(project.settings.path, "project"))
+
     def test_automatic_registry_shared_guid_and_last_unlink(self):
         first, second = self.link(), self.link(self.tool)
         guid = self.lib.settings.get().guid
@@ -158,12 +161,12 @@ class NamedReferenceTests(unittest.TestCase):
 
     def test_legacy_guid_and_links_migrate_once_with_dependency_ids(self):
         guid = self.lib.settings.get().guid
-        raw = storage.read_json(self.lib.settings.path)
+        raw = self.legacy(self.lib)
         del raw["data"]["guid"]
         storage.atomic_write(self.lib.settings.path, storage.encoded(raw))
         ids = []
         for project in (self.app, self.tool):
-            raw = storage.read_json(project.settings.path)
+            raw = self.legacy(project)
             del raw["data"]["guid"]
             key = uuid.uuid4().hex
             ids.append(key)
@@ -181,7 +184,7 @@ class NamedReferenceTests(unittest.TestCase):
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
     def test_failed_legacy_migration_restores_consumer(self):
-        raw = storage.read_json(self.app.settings.path)
+        raw = self.legacy(self.app)
         del raw["data"]["guid"]
         raw["data"]["dependencies"][uuid.uuid4().hex] = {
             "project": "Lib", "project_type": "static_library", "solution_directory": str(self.config)}
@@ -233,7 +236,7 @@ class NamedReferenceTests(unittest.TestCase):
 
     def test_legacy_external_cycle_migrates_then_reports_cycle(self):
         for project, other in ((self.lib, self.app), (self.app, self.lib)):
-            raw = storage.read_json(project.settings.path)
+            raw = self.legacy(project)
             del raw["data"]["guid"]
             raw["data"]["types"] = {"static_library": next(iter(raw["data"]["types"].values()))}
             # Keep the existing kind documents valid while making both ends linkable.

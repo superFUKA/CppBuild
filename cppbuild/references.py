@@ -1,12 +1,11 @@
 """Solution-owned external references, maintained by Project settings writes."""
 from contextlib import ExitStack
 from copy import deepcopy
-from dataclasses import asdict
 import hashlib
 from pathlib import Path
 import uuid
 
-from . import dependencies, storage
+from . import dependencies, paths, storage
 from .models import ChangeReport, Dependency, ProjectReference, SettingsConflictError, SettingsError
 
 
@@ -54,9 +53,12 @@ def _register(values, name, reference):
 
 
 def normalize(solution, values, data, *, migrate=True):
+    for reference in values.references.values():
+        reference.solution_directory = paths.rebase(reference.solution_directory, solution.root, solution.root)
     by_name = {p.name: d for p, d in data.items()}
     guids = set()
-    for item in data.values():
+    for project, item in data.items():
+        paths.project_values(item, lambda value: paths.rebase(value, project.root, project.root))
         if item.guid is None:
             item.guid = str(uuid.uuid4())
         if item.guid in guids:
@@ -87,7 +89,7 @@ def normalize(solution, values, data, *, migrate=True):
                     except KeyError as exc:
                         raise SettingsError("Missing legacy dependency Project") from exc
                     key = other.settings._data.guid
-                    _register(values, key, ProjectReference(key, str(config)))
+                    _register(values, key, ProjectReference(key, paths.relative(solution.root, config)))
                     dependency.reference = key
                     dependency.project_guid = None
                     dependency.solution_directory = None
@@ -106,13 +108,15 @@ def normalize(solution, values, data, *, migrate=True):
 
 def _publish(solution, values, data, originals, revisions, solution_revision):
     documents = {}
+    rewritten = set()
     for project, item in data.items():
         project.settings._validate(item)
-        if item != originals[project]:
+        if item != originals[project] or any(storage.needs_migration(p) for p in revisions[project]):
             documents.update(project.settings._documents(item))
+            rewritten.add(project)
     solution.settings._validate(values)
-    content = storage.encoded(storage.envelope("solution", asdict(values)))
-    if values != solution.settings._read():
+    content = solution.settings._document(values)
+    if values != solution.settings._read() or storage.needs_migration(solution.settings.path):
         documents[solution.settings.path] = content
     with ExitStack() as locks:
         locks.enter_context(storage.write_lock(solution.settings.path.parent))
@@ -125,7 +129,7 @@ def _publish(solution, values, data, originals, revisions, solution_revision):
         changed = storage.publish_documents(documents)
     # Keep unchanged revisions to detect edits made after the transaction.
     for project in data:
-        if data[project] != originals[project]:
+        if project in rewritten:
             revisions[project] = {p: hashlib.sha256(c).hexdigest()
                                   for p, c in project.settings._documents(data[project]).items()}
     return ChangeReport(changed)
@@ -137,10 +141,11 @@ def load(solution, values, projects, loaded, solution_revision, *, migrate):
     revisions = {p: loaded[name][1] for name, p in projects.items()}
     data = {p: deepcopy(d) for p, d in originals.items()}
     normalize(solution, values, data, migrate=migrate)
-    if data != originals or values != previous:
+    if data != originals or values != previous or storage.needs_migration(solution.settings.path) or any(
+            storage.needs_migration(path) for revision in revisions.values() for path in revision):
         report = _publish(solution, values, data, originals, revisions, solution_revision)
         if str(solution.settings.path) in report.changed_paths:
-            solution_revision = hashlib.sha256(storage.encoded(storage.envelope("solution", asdict(values)))).hexdigest()
+            solution_revision = hashlib.sha256(solution.settings._document(values)).hexdigest()
     return {p.name: (d, revisions[p]) for p, d in data.items()}, solution_revision
 
 
@@ -164,7 +169,7 @@ def save_project(settings, values, *, additions=None):
     solution.settings._data = parent
     if str(solution.settings.path) in report.changed_paths:
         solution.settings._revision = {solution.settings.path: hashlib.sha256(
-            storage.encoded(storage.envelope("solution", asdict(parent)))).hexdigest()}
+            solution.settings._document(parent)).hexdigest()}
     return report
 
 
@@ -189,6 +194,6 @@ def link(settings, config_directory, link_type, name):
         raise SettingsError("Dependency is already registered")
     key = uuid.uuid4().hex
     values.dependencies[key] = dependency
-    save_project(settings, values, additions={name: ProjectReference(project_guid, str(config))})
+    save_project(settings, values, additions={name: ProjectReference(project_guid, paths.relative(settings.owner.solution.root, config))})
     from .models import LinkReport
     return LinkReport(key, project_name, link_type)

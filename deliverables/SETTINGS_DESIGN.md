@@ -73,7 +73,7 @@ Library/.cppbuild/
     shared_library.json       # 共有版の定義
 ```
 
-共通値と種類固有値を分け、参照された種類ファイルを自動で読み込む。型とファイルの対応、重複・不足・非対応種類を検証する。分割しても相対パスの基準はProjectルートを維持する。
+共通値と種類固有値を分け、参照された種類ファイルを自動で読み込む。型とファイルの対応、重複・不足・非対応種類を検証する。APIでの相対パスはProjectルート基準を維持する。schema_version=2の保存JSONは種類ファイル自身の親ディレクトリ基準へ変換する。
 
 利用側がファイルの読み書きを個別に行う必要はなく、project.settingsが保存・読み込みを担当する。複数ファイル保存の途中失敗・外部編集との競合は実装時に設計する。独立した種類用の公開管理クラスを必須にはしない。
 
@@ -117,8 +117,24 @@ SolutionSettingsDataに `solution_folders` を追加。`None` または `Solutio
 ## 2026-09-30追加：GUIDと名前付き参照の保存
 
 - Project管理ファイルにUUID形式の `guid` を保存する。新規作成で発行し、通常saveでの変更は禁止。Project移動で保持し、テンプレート作成・復元では所属Projectごとに新規発行して内部依存を付け替える。
-- Solution管理ファイルの `references` に参照名と対象GUID・外部Solutionの管理ディレクトリを保存する。新規リンク時の所在は絶対パスへ正規化。Projectの外部 `Dependency` は `reference` に登録名を保持し、`solution_directory` / `project_guid` はNoneとする。`project` は登録時の名前、`project_type` は使用する種類。内部Dependencyは `project_guid` を保持する。
+- Solution管理ファイルの `references` に参照名と対象GUID・外部Solutionの管理ディレクトリを保存する。新規リンク時の所在はAPI上でSolutionルート相対、保存JSONでは設定ファイル相対へ正規化。Projectの外部 `Dependency` は `reference` に登録名を保持し、`solution_directory` / `project_guid` はNoneとする。`project` は登録時の名前、`project_type` は使用する種類。内部Dependencyは `project_guid` を保持する。
 - 参照の利用数を別途保存せず、所属Projectの依存一覧から算出する。最後の依存の解除・Project登録解除で参照名を自動削除する。別名はそれぞれ独立して整理する。
 - 依存保存時はSolutionと全所属Projectのロック・設定指紋を確認し、変更したProjectとSolutionの文書をまとめて公開する。通常の書き込み失敗では公開済み文書を復元し、メモリ上の状態は成功後に更新する。強制終了・停電をまたぐ自動復旧は対象外。
 - schema_version=1の旧設定はopen/reload時に自動移行する。GUID未保存のProjectにGUIDを付与し、外部パスをSolutionの一覧へ集約。既存dependency_idを保持する。外部リンク先のGUID付与はリンク先Solution単位で行い、利用側の移行が失敗しても完了済みのリンク先GUIDは保持する。移行後の再読み込みでは書き込まない。
-- コピーで同じGUIDが別所在に現れた場合は、参照登録または依存解決で衝突として拒否する。外部Solution全体の移動先の自動探索・専用の所在更新APIは追加しない。全利用元でunlink後、新しいパスへ再リンクする。外部Solution内のProject移動はGUIDで追跡する。
+- コピーで同じGUIDが別所在に現れた場合は、参照登録または依存解決で衝突として拒否する。外部Solution全体の移動先の自動探索・専用の所在更新APIは追加しない。相対配置が変わる場合は全利用元でunlink後、新しいパスへ再リンクする。利用側と外部Solutionの相対配置を保った一括移設は設定変更不要。外部Solution内のProject移動はGUIDで追跡する。
+
+## 2026-09-30追加：相対パスの保存形式（schema_version=2）
+
+パス文字列は `/` 区切りで、値を保存するJSONの親ディレクトリからの相対パスとする。APIの入力基準は変更しない。保存JSONを読み込んでgetで返す型付きパスはSolution／Projectルート相対で、絶対パスを入力した場合もJSONでは相対化する。
+
+| 保存先 | 項目と例 |
+| --- | --- |
+| Solutionの `.cppbuild/project.json` | projects=`../App`、file_templates=`templates/Header.hpp`、referencesの所在=`../../Provider/.cppbuild` |
+| Projectの `.cppbuild/project.json` | source_directories=`../src`、project_headers=`../include/pch.hpp`、types=`types/<種類とハッシュ>.json`、外部ライブラリ等も同ファイル基準 |
+| Projectの `.cppbuild/types/<種類とハッシュ>.json` | include_directories=`../../include` |
+
+schema_version=1は従来の基準で読み、型付き絶対パスを相対化して既存の文書公開・失敗復元処理で移行する。GUID・dependency_id・リンク名は保持する。移行済みの再読み込みは保存しない。種類別ファイルは新しい内容のファイルを先に作り、Projectの参照を切り替える。旧種類ファイルの自動削除は行わない。
+
+相対化できない別ドライブ／別共有への参照は拒否し、絶対パスへ暗黙に戻さない。移行は元の配置で実施する。すでに別環境へ移された旧絶対パスから、新しい対応先を推測することはしない。
+
+一時ディレクトリで作るテンプレートも、最終出力先を基準に外部参照を補正してから公開する。コピーする内部ファイルへの参照はコピー先へ、外部参照は同じ外部対象へ向ける。CMake生成物・所有マーカー・キャッシュ、非保存ビルド設定、定義文字列やソース本文は管理パス変換の対象外。

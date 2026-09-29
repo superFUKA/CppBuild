@@ -143,4 +143,23 @@ GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡�
 
 Projectの登録解除でも未使用になった参照を自動削除する。依存の変更を生成物へ反映する際は、従来どおりupdate/buildを呼ぶ。リンク先のファイルや成果物は削除しない。
 
-旧管理ファイルはopen/reload時に自動保存して移行するため、初回は書き込み権限と旧外部リンク先が必要。外部Solution全体の所在を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。GUIDだけで移動先を探索する機能はない。
+旧管理ファイルはopen/reload時に自動保存して移行するため、初回は書き込み権限と旧外部リンク先が必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
+
+# 別の環境への移設と相対パス（2026-09-30追加）
+
+管理JSONのパスは、そのJSONがあるディレクトリからの相対パスで保存する。APIへ絶対パスを渡しても保存時に変換する。APIに相対パスを渡す場合は、従来どおりSolution設定がSolutionルート、Project設定・リンク先がProjectルート基準。open/createの引数は作業ディレクトリ基準のまま。
+
+例えば次の配置では、Consumerの参照一覧に `../../Provider/.cppbuild` を保存する。
+
+```text
+Workspace/
+  Consumer/.cppbuild/project.json
+  Provider/.cppbuild/project.json
+```
+
+Workspace全体を別の場所へ移してから `Solution.open(new_workspace / "Consumer/.cppbuild")` すれば、移設先のProviderを参照する。ソース、include、PCH、共有素材、CMakeソース／パッケージ、ImportedLibraryのDLL・LIB・includeも同じ方式で保存する。利用側と依存先の相対配置を維持すること。
+
+- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=2へ自動移行してから移す。初回は設定の書き込み権限が必要。
+- `.cppbuild/build`・`.cppbuild/generated` の既存CMakeキャッシュや生成物は移設先へ持ち込まず、移設先でupdate/buildして再生成する。テンプレート機能はこれらを除外する。
+- ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
+- 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。

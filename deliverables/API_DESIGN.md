@@ -45,7 +45,7 @@ AppのcleanでMath・Toolを削除しない。この合意は以下の全体統�
 
 ### パスと保存
 
-確認済み：Solution.openには全体の設定ディレクトリ.cppbuildを渡す。全体設定はSolution配下、個別設定は各Project配下に置く。共有素材は全体の.cppbuild/templates/。全体の相対パスはSolutionルート、個別設定・ファイル操作・リンク先はProjectルート、open/createの引数は呼び出し側の作業ディレクトリが基準。パッケージ名・システムヘッダー名はファイルパスと区別する。
+確認済み：Solution.openには全体の設定ディレクトリ.cppbuildを渡す。全体設定はSolution配下、個別設定は各Project配下に置く。共有素材は全体の.cppbuild/templates/。APIに渡す相対パスは全体設定がSolutionルート、個別設定・ファイル操作・リンク先がProjectルート、open/createが呼び出し側の作業ディレクトリを基準とする。2026-09-30変更：保存JSONのパスは各設定ファイルの親ディレクトリ基準の相対パスに変換する。JSON読み込み時はAPIの基準へ戻す。パッケージ名・システムヘッダー名はファイルパスと区別する。
 
 詳細案：全体の入口を.cppbuild/solution.json、個別を各Projectの.cppbuild/project.jsonとする。旧全体設定名project.jsonからの変更であり、未合意。保存形式のschema_versionとパスの検証方法はBUILD_DESIGN.mdを参照。
 
@@ -93,7 +93,7 @@ AppのcleanでMath・Toolを削除しない。この合意は以下の全体統�
 ## ジャンル2：テンプレート
 
 2026-09-18 M6実装補足：以下の未確定記述に対し、現在の実装選択は次のとおり。設計上の合意と実装選択を区別する。
-`TemplateTools.create_solution_template`は作成先の絶対`Path`を返し、`Solution.create(..., template=path)`が復元する。保存済み設定・ソース・素材をコピーし、非保存のビルド設定・イベント・観測状態は引き継がない。`.cppbuild`の生成物、`.git`、`build`、`dist`、`.test-work`、`__pycache__`、`.venv`、`.cache`は除外し、管理設定と共有素材は別途復元する。既存出力先・元との入れ子・ファイルシステムリンクを拒否する。外部Solution参照は外部の絶対パスのままで、配布用に内包しない。
+`TemplateTools.create_solution_template`は作成先の絶対`Path`を返し、`Solution.create(..., template=path)`が復元する。保存済み設定・ソース・素材をコピーし、非保存のビルド設定・イベント・観測状態は引き継がない。`.cppbuild`の生成物、`.git`、`build`、`dist`、`.test-work`、`__pycache__`、`.venv`、`.cache`は除外し、管理設定と共有素材は別途復元する。既存出力先・元との入れ子・ファイルシステムリンクを拒否する。外部参照は同じ対象を維持するよう最終出力先からの相対パスへ補正し、配布用に内包しない。
 共有素材は`.cppbuild/templates`配下に保存し、`settings.set_file_template(name, path)`で登録、`file_templates()`でコピー取得、`remove_file_template(name)`で登録のみ解除する。置換はUTF-8本文だけを対象に一度行い、展開時のキーは`{{name}}`と完全一致が必要。置換を省略するとバイナリもそのままコピーできる。コード・ファイル名の推測置換やエスケープ構文はない。
 
 | API案 | 責務 |
@@ -277,3 +277,7 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 - `unlink(dependency_id)` は利用元Projectの依存を解除し、最後の利用がなくなった参照名を自動削除する。Project登録解除やProject設定saveによる依存削除も同じ規則。対象ファイルは削除しない。事前登録・手動削除のAPIは追加しない。
 - 同一Solution内の `link_project` は引数を維持し、内部の対象識別にGUIDを保存。外部リンクは登録時の主ProjectをGUIDで固定し、以後の主Project変更で対象を切り替えない。`LinkReport` と解除用IDは維持する。
 - 旧ファイルはopen/reload時にGUIDと参照一覧を自動保存して移行する。書き込み権限と旧外部リンク先へのアクセスが必要。移行済みファイルの再読み込みは保存しない。詳細は [設定詳細](SETTINGS_DESIGN.md) を参照。
+
+## 2026-09-30追加：設定ファイル基準の相対パス
+
+管理JSONはschema_version=2とし、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。APIの引数は維持し、絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。

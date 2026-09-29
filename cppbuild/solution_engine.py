@@ -76,6 +76,8 @@ def _generate(solution, nodes, selected):
         lines += ['add_custom_target(cppbuild_selected',
                   '  COMMAND "${CMAKE_VS_MSBUILD_COMMAND}" ' + engine._path(sln),
                   f'  "/t:{targets}" "/p:Configuration=$<CONFIG>" "/p:Platform={solution._build_settings.architecture}"',
+                  # Child CMake targets are absent from the aggregate .sln; keep the requested configuration.
+                  '  /p:ShouldUnsetParentConfigurationAndPlatform=false',
                   f'  /m:{solution._build_settings.parallel} /verbosity:minimal VERBATIM)']
     else:
         lines += ["add_custom_target(cppbuild_selected)"]

@@ -106,7 +106,7 @@ Solution／Projectの管理設定は保存する。Projectが複数種類へ対�
 
 set_build_settingsで受け取った値はsaveで書き出さず、reloadで保存値へ切り替えない。updateは管理設定を再読み込みしつつ、メモリ上の実行用設定を保持して整合を検証する案。新しくopenしたインスタンスへは利用側から必要なビルド設定を渡す。
 
-全体の.cppbuild/solution.json、個別の.cppbuild/project.json、個別の.cppbuild/types/<kind>.jsonという配置は案。各設定ファイルを読み込んでも、種類ごとの相対パスはProjectルート基準とする。保存形式の検証、競合、複数ファイル更新の途中失敗は実装時に具体化する。
+全体の.cppbuild/solution.json、個別の.cppbuild/project.json、個別の.cppbuild/types/<kind>.jsonという配置は案。APIでの種類ごとの相対パスはProjectルート基準とする。2026-09-30のschema_version=2では保存JSONを各設定ファイルの親ディレクトリ基準へ変換する。現行の全体ファイル名はproject.json。保存形式・移行・失敗復元はSETTINGS_DESIGN.mdを参照。
 
 CMake入力・キャッシュ・VS生成ファイルは処理に必要な値を含む生成物であり、ビルド設定データの保存・復元APIとは区別する。生成物を実行用設定の復元元にしない。
 
@@ -167,3 +167,9 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 ## 2026-09-30追加：GUIDによる依存の集約
 
 外部Dependencyの参照名を所属Solutionのreferencesで解決し、外部Projectを保存済みGUIDで選ぶ。依存ノードはGUIDと種類で重複排除し、同じGUIDの異なる所在はエラーにする。別名・複数利用元で共有する依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。
+
+## 2026-09-30追加：移設可能な管理パスと構成の引き継ぎ
+
+管理JSONを相対パス化し、利用側と依存先の相対配置を保った移設後も再生成できるようにする。既存CMakeキャッシュ・所有マーカーは環境依存の生成物であり、移設先では再利用しない。管理設定とソースを持ち込み、update/buildで生成する。
+
+移設後の実試験で、外部CMakeソースの子targetが全体.slnの構成表に載らないため、Release時にDebugへ戻る問題を確認。APIが起動する全体MSBuildに `ShouldUnsetParentConfigurationAndPlatform=false` を指定し、子targetにも要求した構成・platformを引き継ぐ。全体操作の構成一致条件は維持する。

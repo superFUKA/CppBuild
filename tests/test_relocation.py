@@ -66,15 +66,15 @@ class RelocationTests(unittest.TestCase):
         self.lib.set_build_settings(ProjectBuildSettings(googletest_archive="../archives/gtest.zip"))
         self.solution.move_project("Lib", "nested/Lib", auto_update=False)
         data = self.lib.settings.get()
-        self.assertEqual(data.source_directories, [str(self.lib.root / "src")])
-        self.assertEqual(data.project_headers, [str(self.lib.root / "include/pch.hpp")])
+        self.assertEqual(data.source_directories, ["src"])
+        self.assertEqual(data.project_headers, ["include/pch.hpp"])
         deps = list(data.dependencies.values())
         self.assertEqual(next(d for d in deps if isinstance(d, CMakeSource)).directory, "../../third_party/source")
         self.assertEqual(next(d for d in deps if isinstance(d, CMakePackage)).directory, "vendor/package")
         direct = self.app.settings.get().dependencies[imported.dependency_id]
         self.assertEqual(direct.locations["Debug"], "../nested/Lib/vendor/lib.dll")
         self.assertEqual(direct.import_libraries["Debug"], "../nested/Lib/vendor/lib.lib")
-        self.assertEqual(direct.include_directories, [str(self.lib.root / "vendor/include")])
+        self.assertEqual(direct.include_directories, ["../nested/Lib/vendor/include"])
         self.assertEqual(self.lib._build_settings.googletest_archive, "../../archives/gtest.zip")
         self.app.settings.save(self.app.settings.get())
 

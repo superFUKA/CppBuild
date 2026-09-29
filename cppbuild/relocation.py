@@ -1,7 +1,6 @@
 """Move a registered Project, preserving settings and rebasing typed paths."""
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
-from dataclasses import asdict
 import hashlib
 import os
 from pathlib import Path
@@ -144,7 +143,7 @@ def move_project(solution, name, destination, *, auto_update=True):
         prepared.append((member, shadow, data, build, documents))
     parent_build = deepcopy(solution._build_settings)
     _tools(parent_build.tools, source, destination)
-    solution_content = storage.encoded(storage.envelope("solution", asdict(values)))
+    solution_content = solution.settings._document(values)
     backup = solution.root / ".cppbuild/relocations" / uuid.uuid4().hex
     location, caches, written, created_parents = [source], [], [], []
     changed = [source, destination]
