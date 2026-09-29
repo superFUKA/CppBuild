@@ -21,7 +21,7 @@ class Node:
         return f"{self.project.name}_{self.settings.project_type.value}_{suffix}"
 
 
-def resolve(projects):
+def resolve(projects, *, include_external_members=False):
     """Return roots and dependency-first nodes with per-operation settings copies."""
     nodes, visiting, ordered, loaded, external = {}, set(), [], set(), {}
     overrides = {}
@@ -72,4 +72,18 @@ def resolve(projects):
         return node
 
     roots = [visit(project) for project in projects]
+    if include_external_members:
+        expanded = set()
+        while any(config not in expanded for config in external):
+            for config, solution in list(external.items()):
+                if config in expanded:
+                    continue
+                expanded.add(config)
+                for project in solution.projects():
+                    if any(node.project.root == project.root for node in ordered):
+                        continue
+                    selected = project._build_settings.project_type
+                    kinds = [selected] if selected is not None else project.settings.get().types
+                    for kind in kinds:
+                        visit(project, kind)
     return roots, ordered

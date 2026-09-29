@@ -71,11 +71,19 @@ class ProjectSettingsData:
 
 
 @dataclass
+class SolutionFolderSettings:
+    projects: str = "Projects"
+    linked_projects: str = "LinkedProjects"
+    project_folders: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class SolutionSettingsData:
     name: str
     projects: dict[str, str] = field(default_factory=dict)
     main_project: str | None = None
     file_templates: dict[str, str] = field(default_factory=dict)
+    solution_folders: SolutionFolderSettings | None = None
 
 
 @dataclass

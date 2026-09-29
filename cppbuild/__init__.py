@@ -7,7 +7,7 @@ from .templates import TemplateTools
 from .events import Event, EventCallbackError
 from .environment import Environment, EnvironmentOptions, EnvironmentReport, EnvironmentItem
 from .information import ProjectInfo, SolutionInfo
-from .models import ToolSettings
+from .models import ToolSettings, SolutionFolderSettings
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
@@ -15,7 +15,7 @@ from .models import (
 )
 
 __all__ = [
-    "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
+    "SolutionFolderSettings", "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
     "TypeSettingsData", "ProjectBuildSettings", "SolutionBuildSettings", "INHERIT",
     "ChangeReport", "SettingsError", "SettingsConflictError",
     "FileOperationReport", "OperationReport", "ProcessReport", "UpdateReport",

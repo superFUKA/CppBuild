@@ -262,3 +262,10 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 ## 次の設計判断
 
 全体／個別の生成範囲、実行用設定の保持・保存との接続、cleanと共有依存を[BUILD_DESIGN.md](BUILD_DESIGN.md)に具体案として記載した。未合意の案を確認済みに変更しない。追加確認はジャンル単位で行い、実装はまだ開始しない。
+## 2026-09-29追加：全体.slnのフォルダー配置
+
+`SolutionSettingsData.solution_folders: SolutionFolderSettings | None` を保存対象として追加。既定値は `None`（従来表示）。
+
+`SolutionFolderSettings(projects="Projects", linked_projects="LinkedProjects", project_folders={})` は、自分の所属Projectのルート名、外部Solution群のルート名、所属Project名から相対表示階層への対応を持つ。既存の `solution.settings.get()/save()` と `solution.update()` で設定・反映する。所属やリンクの登録APIは変更しない。
+
+有効時は外部Solutionの全所属Projectを生成・表示し、ビルド参加は従来の所属・依存関係を維持する。パスの制約・種類選択・同名解決は [利用手順](USAGE.md) を参照。

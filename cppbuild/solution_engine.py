@@ -11,7 +11,7 @@ from .models import ProjectType, SettingsError
 def _prepare(solution):
     solution._last_update = None
     solution.settings.reload()
-    roots, nodes = resolve(solution.projects())
+    roots, nodes = resolve(solution.projects(), include_external_members=solution.settings._data.solution_folders is not None)
     for node in nodes:
         if (node.settings.architecture, node.settings.configuration) != (solution._build_settings.architecture, solution._build_settings.configuration):
             raise SettingsError("Whole-solution operations require matching configuration and architecture")
@@ -48,18 +48,31 @@ def _generate(solution, nodes, selected):
     lines = ["cmake_minimum_required(VERSION 3.24)",
              f"project({solution.settings._data.name} LANGUAGES NONE)",
              "set(CMAKE_SUPPRESS_REGENERATION ON)"]
+    from .solution_folders import placements, dependency_keys
+    folders = placements(solution, nodes)
+    required = dependency_keys([n for n in nodes if n.project.solution.root == solution.root])
+    if folders:
+        lines.append("set_property(GLOBAL PROPERTY USE_FOLDERS ON)")
     for node in nodes:
         _, child_build = engine._locations(node.project, node.settings)
         project_file = child_build / (engine._target(node.project, node.settings) + ".vcxproj")
         guid = ET.parse(project_file).find(".//{*}ProjectGuid").text.strip("{}")
         lines.append(f"include_external_msproject({node.label} {engine._path(project_file)} GUID {engine._quote(guid)})")
+        if node.key in folders:
+            lines.append(f"set_property(TARGET {node.label} PROPERTY FOLDER {engine._quote(folders[node.key])})")
+        if node.key not in required:
+            lines.append(f"set_property(TARGET {node.label} PROPERTY EXCLUDE_FROM_DEFAULT_BUILD TRUE)")
+            lines.append(f"set_property(TARGET {node.label} PROPERTY EXCLUDE_FROM_ALL TRUE)")
     for node in nodes:
         if node.dependencies:
             lines.append(f"add_dependencies({node.label} " + " ".join(d.label for d in node.dependencies) + ")")
     sln = build / (solution.settings._data.name + ".sln")
     if selected:
         # Invoke the .sln, not an external .vcxproj, so MSBuild observes the solution dependency graph.
-        targets = ";".join(n.label for n in selected)
+        target_names = [((folders[n.key].replace("/", "\\") + "\\") if n.key in folders else "") + n.label
+                        for n in selected]
+        cleanse = str.maketrans({c: "_" for c in "%$@;.()'"})
+        targets = ";".join(name.translate(cleanse) for name in target_names).replace("\\", "\\\\")
         lines += ['add_custom_target(cppbuild_selected',
                   '  COMMAND "${CMAKE_VS_MSBUILD_COMMAND}" ' + engine._path(sln),
                   f'  "/t:{targets}" "/p:Configuration=$<CONFIG>" "/p:Platform={solution._build_settings.architecture}"',

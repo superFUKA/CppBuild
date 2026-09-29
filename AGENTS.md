@@ -50,3 +50,4 @@ M3b・M4はコミット済みで完了。M5・M6は実装・資料反映・AC確
 - 実装時に整理するとした細部は、既存の合意内で具体化する。新たな判断事項・問題は設計整理メモへ記録し、依頼に応じてまとめて報告する。
 - 要件・APIを変更したら対応する現行資料を更新する。参考資料内の旧仕様を現行仕様に書き換えない。
 - 作業完了時に進捗・検証状況・次の作業を更新し、未実施の検証を完了扱いにしない。
+2026-09-29追加：`SolutionFolderSettings` と `SolutionSettingsData.solution_folders` による全体.slnの階層表示を実装。管理Projectの任意階層、外部Solution別の全Project表示、未参照Projectのビルド除外を確認。最終の全76件（実VS2022試験13件）が成功。資料反映済み、今回の変更は未コミット。詳細はdeliverables/IMPLEMENTATION_STATUS.mdとdeliverables/USAGE.mdを参照。移動APIは `d287be3` でコミット済み。

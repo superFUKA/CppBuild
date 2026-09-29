@@ -102,3 +102,10 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 - 個別の非保存ビルド設定とイベント登録を保持する。パス補正後もビルド設定は保存しない。移動後のキャッシュ観測状態はstaleにし、自動更新ではsolution.updateで利用側と全体.slnを再生成する。他Solutionの利用側のupdateは呼び出し側の責務。
 
 検証結果・残作業はIMPLEMENTATION_STATUS.mdの同日実装記録を参照。
+## 2026-09-29：ソリューションフォルダーの実装選択
+
+- 表示設定は既定Noneで旧表示を維持。設定時のみ外部Solutionの全所属を再帰的に集める。未参照の複数種類Projectは明示種類がなければ全種類を表示する。
+- 全所属の表示にはCMake構成が必要。表示のみのProjectも構成失敗・依存不正・構成不一致で全体操作を失敗させる。コンパイルしないことと構成不要は区別する。
+- CMakeのUSE_FOLDERS/FOLDERで階層化。表示のみのノードはEXCLUDE_FROM_DEFAULT_BUILDとEXCLUDE_FROM_ALLを併用し、VS既定参加とCMake ALL_BUILDの双方から除く。実依存ノードには適用しない。
+- MSBuildの対象名はフォルダー階層を含め、対象名中の特殊文字をMSBuildの規則で変換する。[Microsoftの仕様](https://learn.microsoft.com/en-us/visualstudio/msbuild/how-to-build-specific-targets-in-solutions-by-using-msbuild-exe)と[CMakeの仕様](https://cmake.org/cmake/help/latest/prop_gbl/USE_FOLDERS.html)を参照。
+- 同名の外部Solutionは正規化済みの所在パス由来のハッシュをフォルダー名に付けて区別。生成target名は既存の一意な名前を維持する。空の仮想フォルダーは生成しない。外部Solution側の表示設定を利用側へ取り込まない。

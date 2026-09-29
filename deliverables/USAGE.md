@@ -93,3 +93,27 @@ python -m unittest discover -s tests -v
 ```
 
 APIの結果型・イベント規則・テンプレートの除外範囲は[API設計](API_DESIGN.md)、保存境界は[設定詳細](SETTINGS_DESIGN.md)を参照。
+# ソリューションフォルダー（2026-09-29追加）
+
+全体 `.sln` の表示階層を保存設定で指定できる。実ディレクトリやProjectの所属は変更しない。
+
+```python
+from cppbuild import SolutionFolderSettings
+
+settings = solution.settings.get()
+settings.solution_folders = SolutionFolderSettings(
+    projects="Projects",
+    linked_projects="LinkedProjects",
+    project_folders={"App": "Apps/Tools", "Core": "Libraries"},
+)
+solution.settings.save(settings)
+report = solution.update()
+```
+
+`project_folders` のキーは自分の所属Project名。値は `Projects` 配下の `/` 区切り相対階層で、未指定・空文字列なら直下。絶対パス・`..`・外部Project名は拒否する。ルートの二つのフォルダー名は単一階層で、同名にできない。
+
+リンク先は `LinkedProjects/<相手のSolution名>` に全所属Projectを表示する。間接リンク先も同じ階層へ集約し、同じSolutionは重複表示しない。同名の別Solutionはパス由来の短い識別子を表示名へ付ける。表示用に追加した未参照Projectは通常のビルド対象に加えないが、表示する `.vcxproj` の生成には、そのProjectの有効な設定・ソース・外部依存が必要になる。TESTの構成ではGoogleTestの取得が必要になり得る。
+
+未参照Projectが複数種類を持つ場合、種類の明示指定がなければ各種類を表示する。実際の依存で参照済みのProjectは要求された種類を表示する。全体操作の構成・architecture・ToolSettingsの整合条件は表示用Projectにも適用する。外部Solutionの設定は `external_build_settings` で指定できる。
+
+保存・再open・テンプレート復元で表示設定を保持する。Project登録解除時は対応する配置設定も削除する。`settings.solution_folders = None` を保存して全体updateすると、従来の依存Projectのみの階層なし表示へ戻る。個別Projectのupdateでは全体表示を変更しない。

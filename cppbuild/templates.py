@@ -147,6 +147,7 @@ def _snapshot(solution, destination, name, *, template):
             _copy_tree(materials, stage / ".cppbuild/templates", exclude=False)
         cloned = clone.settings.get()
         cloned.main_project = values.main_project
+        cloned.solution_folders = values.solution_folders
         cloned.file_templates = {key: material_path(source, value).relative_to(source.root).as_posix()
                                  for key, value in values.file_templates.items()}
         clone.settings.save(cloned)

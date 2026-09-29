@@ -10,7 +10,7 @@ import uuid
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport,
+    TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings,
 )
 from . import storage
 from . import dependencies as dependency_data
@@ -282,6 +282,8 @@ class SolutionSettings(_Settings):
         _name(values.name)
         if not isinstance(values.projects, dict):
             raise SettingsError("projects must be a mapping")
+        from .solution_folders import validate
+        validate(values.solution_folders, values.projects)
         roots = set()
         for name, relative in values.projects.items():
             _name(name)
@@ -305,7 +307,14 @@ class SolutionSettings(_Settings):
     def _read(self):
         raw = storage.manifest(self.path, "solution")
         raw.setdefault("file_templates", {})
-        storage.object_fields(raw, {"name", "projects", "main_project", "file_templates"})
+        raw.setdefault("solution_folders", None)
+        storage.object_fields(raw, {"name", "projects", "main_project", "file_templates", "solution_folders"})
+        if raw["solution_folders"] is not None:
+            folder = raw["solution_folders"]
+            if not isinstance(folder, dict):
+                raise SettingsError("Expected solution folder object")
+            storage.object_fields(folder, {"projects", "linked_projects", "project_folders"})
+            raw["solution_folders"] = SolutionFolderSettings(**folder)
         values = SolutionSettingsData(**raw)
         self._validate(values)
         return values
@@ -608,6 +617,8 @@ class Solution:
             if any(isinstance(d, Dependency) and d.solution_directory is None and d.project == name for d in project.settings._data.dependencies.values()):
                 raise SettingsError("Unlink references before removing this Project")
         del values.projects[name]
+        if values.solution_folders is not None:
+            values.solution_folders.project_folders.pop(name, None)
         with storage.write_lock(self.settings.path.parent):
             self.settings._assert_unchanged()
             report = self.settings._publish(values)

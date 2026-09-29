@@ -35,6 +35,7 @@ python -m examples.complete_workflow .test-work/workflow
 - 個別生成・全体.sln統合、内部／外部依存、静的／共有ライブラリ、PCH
 - GoogleTest／CTest、実行順・並列数・非同期待機
 - テンプレート、イベント、環境診断、観測済み情報の取得
+- 全体.slnのソリューションフォルダー配置、リンク先Solutionの全Project表示
 
 対象はVS2022です。他のgeneratorやVS IDEのGUI表示は検証していません。バージョン0.1.0の初期実装であり、制約・検証範囲は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)に記載しています。
 

@@ -158,3 +158,8 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 ## 最新追加事項：実行順とGoogleTest導入
 
 実行順は既定を用意し設定で変更できることを確認済み。既定の具体案と、CMakeのFetchContent・GoogleTestモジュール・CTestによる導入案は[SETTINGS_DESIGN.md](SETTINGS_DESIGN.md)を参照する。実際の取得・ビルド・テストは未実施。
+## 2026-09-29追加：全体.slnの表示階層
+
+`SolutionSettingsData.solution_folders` が有効な全体update/buildでは、リンク先Solutionの全所属Projectも構成して独立.vcxprojを全体.slnへ登録する。管理Projectは指定したルートと相対階層へ、外部Projectは外部用ルート/Solution名へ配置する。実生成物の所有場所は変更しない。
+
+表示のみのProjectは既定ビルドとALL_BUILDから除く。APIのbuild/run/test選択、cleanの対象範囲は自分の所属一覧に基づく。表示用構成が失敗した場合は全体操作も失敗する。設定なしでは従来の依存範囲と表示を維持する。

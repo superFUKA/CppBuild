@@ -110,3 +110,6 @@ gtest_discover_testsはビルド済みテスト実行ファイルを使う。upd
 取得方法は固定版FetchContentを暫定採用する。具体的な版・保存配置・複数独立Project間のソース再利用は実装時に選定・検証する。既存パッケージやローカルソースの指定は設計候補として残す。WindowsのランタイムはProjectとGoogleTestで整合させ、公式例のCRT指定を全構成へ無条件に流用しない。
 
 根拠：[GoogleTest公式CMake導入例](https://google.github.io/googletest/quickstart-cmake.html)、[CMake GoogleTestモジュール](https://cmake.org/cmake/help/latest/module/GoogleTest.html)、[FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html)、[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html)。導入・ビルド・実行の実検証はまだ行っていない。
+## 2026-09-29追加：保存する表示設定
+
+SolutionSettingsDataに `solution_folders` を追加。`None` または `SolutionFolderSettings`（`projects`、`linked_projects`、`project_folders`）を保存する。旧管理ファイルで項目がない場合は `None` として読む。ビルド設定には含めない。設定のコピー分離・検証・競合検出は既存のget/saveに従う。テンプレートに含め、登録解除時にそのProjectの配置指定を除く。
