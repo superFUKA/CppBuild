@@ -42,6 +42,29 @@ def atomic_write(path, data):
         Path(temporary).unlink(missing_ok=True)
 
 
+def publish_documents(documents):
+    """Restore published documents on failure; callers hold all writer locks."""
+    written = []
+    try:
+        for path, content in documents.items():
+            previous = path.read_bytes() if path.exists() else None
+            if previous == content:
+                continue
+            written.append((path, previous))
+            atomic_write(path, content)
+    except BaseException as failure:
+        try:
+            for path, previous in reversed(written):
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                elif not path.exists() or path.read_bytes() != previous:
+                    atomic_write(path, previous)
+        except OSError as recovery:
+            raise SettingsError(f"Settings rollback failed: {recovery}") from failure
+        raise
+    return tuple(str(path) for path, _ in written)
+
+
 @contextmanager
 def write_lock(directory):
     directory = Path(directory)

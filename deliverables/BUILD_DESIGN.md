@@ -163,3 +163,7 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 `SolutionSettingsData.solution_folders` が有効な全体update/buildでは、リンク先Solutionの全所属Projectも構成して独立.vcxprojを全体.slnへ登録する。管理Projectは指定したルートと相対階層へ、外部Projectは外部用ルート/Solution名へ配置する。実生成物の所有場所は変更しない。
 
 表示のみのProjectは既定ビルドとALL_BUILDから除く。APIのbuild/run/test選択、cleanの対象範囲は自分の所属一覧に基づく。表示用構成が失敗した場合は全体操作も失敗する。設定なしでは従来の依存範囲と表示を維持する。
+
+## 2026-09-30追加：GUIDによる依存の集約
+
+外部Dependencyの参照名を所属Solutionのreferencesで解決し、外部Projectを保存済みGUIDで選ぶ。依存ノードはGUIDと種類で重複排除し、同じGUIDの異なる所在はエラーにする。別名・複数利用元で共有する依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。

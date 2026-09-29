@@ -113,3 +113,12 @@ gtest_discover_testsはビルド済みテスト実行ファイルを使う。upd
 ## 2026-09-29追加：保存する表示設定
 
 SolutionSettingsDataに `solution_folders` を追加。`None` または `SolutionFolderSettings`（`projects`、`linked_projects`、`project_folders`）を保存する。旧管理ファイルで項目がない場合は `None` として読む。ビルド設定には含めない。設定のコピー分離・検証・競合検出は既存のget/saveに従う。テンプレートに含め、登録解除時にそのProjectの配置指定を除く。
+
+## 2026-09-30追加：GUIDと名前付き参照の保存
+
+- Project管理ファイルにUUID形式の `guid` を保存する。新規作成で発行し、通常saveでの変更は禁止。Project移動で保持し、テンプレート作成・復元では所属Projectごとに新規発行して内部依存を付け替える。
+- Solution管理ファイルの `references` に参照名と対象GUID・外部Solutionの管理ディレクトリを保存する。新規リンク時の所在は絶対パスへ正規化。Projectの外部 `Dependency` は `reference` に登録名を保持し、`solution_directory` / `project_guid` はNoneとする。`project` は登録時の名前、`project_type` は使用する種類。内部Dependencyは `project_guid` を保持する。
+- 参照の利用数を別途保存せず、所属Projectの依存一覧から算出する。最後の依存の解除・Project登録解除で参照名を自動削除する。別名はそれぞれ独立して整理する。
+- 依存保存時はSolutionと全所属Projectのロック・設定指紋を確認し、変更したProjectとSolutionの文書をまとめて公開する。通常の書き込み失敗では公開済み文書を復元し、メモリ上の状態は成功後に更新する。強制終了・停電をまたぐ自動復旧は対象外。
+- schema_version=1の旧設定はopen/reload時に自動移行する。GUID未保存のProjectにGUIDを付与し、外部パスをSolutionの一覧へ集約。既存dependency_idを保持する。外部リンク先のGUID付与はリンク先Solution単位で行い、利用側の移行が失敗しても完了済みのリンク先GUIDは保持する。移行後の再読み込みでは書き込まない。
+- コピーで同じGUIDが別所在に現れた場合は、参照登録または依存解決で衝突として拒否する。外部Solution全体の移動先の自動探索・専用の所在更新APIは追加しない。全利用元でunlink後、新しいパスへ再リンクする。外部Solution内のProject移動はGUIDで追跡する。

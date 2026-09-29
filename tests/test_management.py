@@ -83,6 +83,8 @@ class ManagementTests(unittest.TestCase):
         lib.set_build_settings(ProjectBuildSettings(project_type=T.SHARED_LIBRARY))
         self.assertEqual(lib._resolved_build_settings().project_type, T.SHARED_LIBRARY)
         loaded = Solution.open(self.root / ".cppbuild").get_project("Lib")
+        self.assertNotEqual(lib.settings.get().guid, data.guid)
+        data.guid = lib.settings.get().guid
         self.assertEqual(loaded.settings.get(), data)
 
     def test_failed_manifest_publish_preserves_disk_and_memory(self):

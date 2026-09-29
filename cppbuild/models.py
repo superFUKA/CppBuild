@@ -1,6 +1,7 @@
 """Management data and ephemeral build settings (initial implementation)."""
 from dataclasses import dataclass, field
 from enum import Enum
+import uuid
 
 
 class ProjectType(str, Enum):
@@ -30,6 +31,14 @@ class Dependency:
     project: str
     project_type: ProjectType
     solution_directory: str | None = None
+    reference: str | None = None
+    project_guid: str | None = None
+
+
+@dataclass
+class ProjectReference:
+    project_guid: str
+    solution_directory: str
 
 
 @dataclass
@@ -68,6 +77,7 @@ class ProjectSettingsData:
     dependencies: dict[str, Dependency] = field(default_factory=dict)
     project_headers: list[str] = field(default_factory=list)
     system_headers: list[str] = field(default_factory=list)
+    guid: str = field(default_factory=lambda: str(uuid.uuid4()))
 
 
 @dataclass
@@ -84,6 +94,7 @@ class SolutionSettingsData:
     main_project: str | None = None
     file_templates: dict[str, str] = field(default_factory=dict)
     solution_folders: SolutionFolderSettings | None = None
+    references: dict[str, ProjectReference] = field(default_factory=dict)
 
 
 @dataclass

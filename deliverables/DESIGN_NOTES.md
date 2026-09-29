@@ -109,3 +109,12 @@ M3a追加：include_external_msproject単独では`cmake --build --target App`�
 - CMakeのUSE_FOLDERS/FOLDERで階層化。表示のみのノードはEXCLUDE_FROM_DEFAULT_BUILDとEXCLUDE_FROM_ALLを併用し、VS既定参加とCMake ALL_BUILDの双方から除く。実依存ノードには適用しない。
 - MSBuildの対象名はフォルダー階層を含め、対象名中の特殊文字をMSBuildの規則で変換する。[Microsoftの仕様](https://learn.microsoft.com/en-us/visualstudio/msbuild/how-to-build-specific-targets-in-solutions-by-using-msbuild-exe)と[CMakeの仕様](https://cmake.org/cmake/help/latest/prop_gbl/USE_FOLDERS.html)を参照。
 - 同名の外部Solutionは正規化済みの所在パス由来のハッシュをフォルダー名に付けて区別。生成target名は既存の一意な名前を維持する。空の仮想フォルダーは生成しない。外部Solution側の表示設定を利用側へ取り込まない。
+
+## 2026-09-30：名前付きリンクとGUIDの実装選択
+
+- Project側link_solutionのname追加だけで操作できる。専用の参照登録・削除APIを増やさず、一覧確認には既存settings.get().referencesを使用する。同一Solution内link_projectの呼び出し方は維持する。
+- GUIDはProjectの管理上の識別子であり、CMakeが生成する.vcxprojのProjectGuidとは別。Project作成ごとに新規発行し、保存・移動では保持する。別名で参照してもGUID・種類が同じなら生成対象は共用する。
+- 外部参照の名前は大文字・小文字を区別。同名の異なる対象はエラー。同じGUIDの異なる所在もエラーにして、コピーされたProjectを暗黙に統合しない。外部Solution全体の移動先をGUIDだけで探索することはしない。
+- 旧設定の移行はopen/reload時に行うため、旧形式については読み込み時にも保存が発生する。循環依存で移行が再帰し続けないよう、外部側のGUID付与はリンクの移行と分離する。循環は依存解決時に診断する。旧外部リンク先が読めない場合は利用側の移行も失敗する。
+- 参照一覧と利用元の更新にはSolutionおよび全所属Projectの設定ロック・指紋を使用し、古い利用元一覧で共有参照を消さないようにする。複数ファイル公開の通常失敗では復元する。強制終了後の自動復旧は含めない。
+- 参照名は全体.slnのProject表示名には使用しない。既存のSolution名によるフォルダー表示を維持し、別名参照でもProjectを二重表示しない。

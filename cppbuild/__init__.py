@@ -11,7 +11,7 @@ from .models import ToolSettings, SolutionFolderSettings
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary,
+    TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
 )
 
 __all__ = [
@@ -19,7 +19,7 @@ __all__ = [
     "TypeSettingsData", "ProjectBuildSettings", "SolutionBuildSettings", "INHERIT",
     "ChangeReport", "SettingsError", "SettingsConflictError",
     "FileOperationReport", "OperationReport", "ProcessReport", "UpdateReport",
-    "Dependency", "LinkReport",
+    "Dependency", "LinkReport", "ProjectReference",
     "CMakePackage", "CMakeSource", "ImportedLibrary",
     "RunReport", "TestReport", "TestCaseResult",
     "TemplateTools", "Event", "EventCallbackError", "Environment", "EnvironmentOptions",

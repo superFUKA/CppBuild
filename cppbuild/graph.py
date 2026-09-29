@@ -13,7 +13,7 @@ class Node:
 
     @property
     def key(self):
-        return (str(self.project.root), self.settings.project_type.value)
+        return (self.project.settings._data.guid, self.settings.project_type.value)
 
     @property
     def label(self):
@@ -24,6 +24,7 @@ class Node:
 def resolve(projects, *, include_external_members=False):
     """Return roots and dependency-first nodes with per-operation settings copies."""
     nodes, visiting, ordered, loaded, external = {}, set(), [], set(), {}
+    locations, registries = {}, {}
     overrides = {}
     for project in projects:
         for directory, data in project.solution._build_settings.external_build_settings.items():
@@ -34,8 +35,14 @@ def resolve(projects, *, include_external_members=False):
         if project not in loaded:
             project.settings.reload()
             loaded.add(project)
+        if project.solution not in registries:
+            registries[project.solution] = project.solution.settings._read().references
         settings = project._resolved_build_settings(requested)
-        key = (str(project.root), settings.project_type.value)
+        project_guid = project.settings._data.guid
+        previous = locations.setdefault(project_guid, project.root)
+        if previous != project.root:
+            raise SettingsError("The same Project GUID exists at multiple locations")
+        key = (project_guid, settings.project_type.value)
         if key in visiting:
             raise SettingsError(f"Dependency cycle involving {project.name}")
         if key in nodes:
@@ -47,16 +54,22 @@ def resolve(projects, *, include_external_members=False):
                 continue
             try:
                 solution = project.solution
-                if reference.solution_directory is not None:
+                if reference.reference is not None:
                     from .core import Solution
-                    from .dependencies import path
-                    config = path(project, reference.solution_directory)
+                    from .references import target
+                    entry = registries[solution][reference.reference]
+                    config = (solution.root / entry.solution_directory).resolve()
                     if config not in external:
                         external[config] = Solution.open(config)
                         if config in overrides:
                             external[config].set_build_settings(overrides[config])
                     solution = external[config]
-                other = solution.get_project(reference.project)
+                    other = target(solution, entry.project_guid)
+                elif reference.project_guid is not None:
+                    from .references import target
+                    other = target(solution, reference.project_guid)
+                else:
+                    other = solution.get_project(reference.project)
             except KeyError as exc:
                 raise SettingsError(f"Missing dependency Project: {reference.project}") from exc
             child = visit(other, reference.project_type)

@@ -117,3 +117,30 @@ report = solution.update()
 未参照Projectが複数種類を持つ場合、種類の明示指定がなければ各種類を表示する。実際の依存で参照済みのProjectは要求された種類を表示する。全体操作の構成・architecture・ToolSettingsの整合条件は表示用Projectにも適用する。外部Solutionの設定は `external_build_settings` で指定できる。
 
 保存・再open・テンプレート復元で表示設定を保持する。Project登録解除時は対応する配置設定も削除する。`settings.solution_folders = None` を保存して全体updateすると、従来の依存Projectのみの階層なし表示へ戻る。個別Projectのupdateでは全体表示を変更しない。
+
+# 名前付きリンクの自動管理（2026-09-30追加）
+
+```python
+from cppbuild import ProjectType
+
+# 呼び出すだけで所属Solutionに参照を登録。省略時の名前は対象ProjectのGUID。
+a = app_a.settings.link_solution(external_config, ProjectType.STATIC_LIBRARY)
+b = app_b.settings.link_solution(external_config, ProjectType.STATIC_LIBRARY)
+references = solution.settings.get().references  # 参照は1件、利用元は2つ
+
+# 任意名で同じ対象への別の参照を登録することもできる。
+alias = app_a.settings.link_solution(
+    external_config, ProjectType.STATIC_LIBRARY, name="Common"
+)
+app_a.settings.unlink(a.dependency_id)  # app_bが使用中なのでGUID名の登録を保持
+app_b.settings.unlink(b.dependency_id)  # 最後の利用なのでGUID名の登録を自動削除
+app_a.settings.unlink(alias.dependency_id)  # Commonも自動削除
+```
+
+名前は大文字・小文字を区別する空でない文字列。同名・同じ対象GUID・同所在なら共用する。同名の異なる対象や、同じGUIDの異なる所在はエラー。同じProjectに同名・同種類を二度追加することはできない。別名で同じ対象を追加しても、ビルド・全体.slnではGUIDと種類に基づき一つに集約する。単一の利用Projectから同じ対象の異なる種類をリンクすることは従来どおり不可。
+
+GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡した設定のGUIDを引き継がず、新しいGUIDを発行する。Project移動はGUIDを保持するので、既存リンクは移動後も同じProjectを参照する。テンプレートから新規作成した所属Projectは新しいGUIDになるが、外部への参照は維持する。
+
+Projectの登録解除でも未使用になった参照を自動削除する。依存の変更を生成物へ反映する際は、従来どおりupdate/buildを呼ぶ。リンク先のファイルや成果物は削除しない。
+
+旧管理ファイルはopen/reload時に自動保存して移行するため、初回は書き込み権限と旧外部リンク先が必要。外部Solution全体の所在を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。GUIDだけで移動先を探索する機能はない。

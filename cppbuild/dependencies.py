@@ -2,11 +2,25 @@
 from dataclasses import asdict
 from pathlib import Path
 import re
+import uuid
 
 from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, ProjectType, SettingsError
 
 
 KINDS = {"project": Dependency, "package": CMakePackage, "source": CMakeSource, "imported": ImportedLibrary}
+
+
+def guid(value):
+    try:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+            raise ValueError()
+    except (ValueError, AttributeError) as exc:
+        raise SettingsError("Expected a canonical Project GUID") from exc
+
+
+def reference_name(value):
+    if not isinstance(value, str) or not value or value != value.strip() or any(ord(c) < 32 for c in value):
+        raise SettingsError("Expected a nonempty reference name without control characters")
 
 
 def encode(value):
@@ -45,6 +59,12 @@ def validate(project, value):
             raise SettingsError("Invalid dependency Project name")
         if value.solution_directory is not None:
             path(project, value.solution_directory)
+        if value.reference is not None:
+            reference_name(value.reference)
+            if value.solution_directory is not None or value.project_guid is not None:
+                raise SettingsError("Named references store their target only in the Solution")
+        if value.project_guid is not None:
+            guid(value.project_guid)
     elif isinstance(value, (CMakePackage, CMakeSource)):
         path(project, value.directory)
         if not isinstance(value.target, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:.+-]*", value.target):

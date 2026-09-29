@@ -2,7 +2,7 @@
 
 > 2026-09-17 実装開始後の追記：M1（管理モデル・設定保存・非保存ビルド設定）を実装し、自動テスト13件を確認。最新の進捗・検証・次の作業は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)を参照。以下の「未着手」「実装はまだ開始しない」は設計整理時点の記録であり、今回の実装依頼を制限しない。設計の合意状態は維持する。
 
-更新日：2026-09-28。
+更新日：2026-09-30。
 
 2026-09-28追加：Project移動API `solution.move_project(name, destination, *, auto_update=True)`を実装し、全68件（実VS2022試験12件）が成功。既存のFileOperationReport形式を使用する。最新の実装範囲・制約・検証は実装記録、利用例はdeliverables/USAGE.mdを参照。
 
@@ -51,3 +51,5 @@ M3b・M4はコミット済みで完了。M5・M6は実装・資料反映・AC確
 - 要件・APIを変更したら対応する現行資料を更新する。参考資料内の旧仕様を現行仕様に書き換えない。
 - 作業完了時に進捗・検証状況・次の作業を更新し、未実施の検証を完了扱いにしない。
 2026-09-29追加：`SolutionFolderSettings` と `SolutionSettingsData.solution_folders` による全体.slnの階層表示を実装。管理Projectの任意階層、外部Solution別の全Project表示、未参照Projectのビルド除外を確認。最終の全76件（実VS2022試験13件）が成功。資料反映済み、今回の変更は未コミット。詳細はdeliverables/IMPLEMENTATION_STATUS.mdとdeliverables/USAGE.mdを参照。移動APIは `d287be3` でコミット済み。
+
+2026-09-30追加：Projectの永続GUIDと `link_solution(..., *, name=None)` を実装。Project側からのリンク操作でSolutionの参照一覧へ自動登録・共用し、最後の利用解除またはProject登録解除で自動削除する。旧設定移行、移動、テンプレート、失敗復元に対応。最終の全92件（実VS2022試験14件・skipなし）が成功、130.410秒。資料反映・自己レビュー済み。今回の変更は未コミットで、次の作業は差分確認後のコミット。フォルダー機能は `5e4c015` でコミット・push済み。制約・検証は実装記録、利用例は利用手順を参照。コミットメッセージはユーザーの希望により日本語とする。

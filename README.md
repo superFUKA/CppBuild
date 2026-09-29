@@ -36,6 +36,7 @@ python -m examples.complete_workflow .test-work/workflow
 - GoogleTest／CTest、実行順・並列数・非同期待機
 - テンプレート、イベント、環境診断、観測済み情報の取得
 - 全体.slnのソリューションフォルダー配置、リンク先Solutionの全Project表示
+- GUIDでのProject識別、名前付き外部リンクの自動登録・共用・未使用参照の自動削除
 
 対象はVS2022です。他のgeneratorやVS IDEのGUI表示は検証していません。バージョン0.1.0の初期実装であり、制約・検証範囲は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)に記載しています。
 

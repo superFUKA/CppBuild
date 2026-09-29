@@ -140,8 +140,21 @@ def _snapshot(solution, destination, name, *, template):
         stage = Path(temporary) / "snapshot"
         _copy_tree(source.root, stage)
         clone = Solution.create(stage, name)
+        cloned = clone.settings.get()
+        cloned.references = deepcopy(values.references)
+        for reference in cloned.references.values():
+            reference.solution_directory = str((source.root / reference.solution_directory).resolve())
+        clone.settings._publish(cloned)
+        identities = {}
         for project, data in project_data:
-            clone.add_project(values.projects[project.name], project.name, next(iter(data.types)), data)
+            created = clone.add_project(values.projects[project.name], project.name, next(iter(data.types)), data)
+            identities[data.guid] = created.settings.get().guid
+        for project in clone.projects():
+            data = project.settings.get()
+            for dependency in data.dependencies.values():
+                if isinstance(dependency, Dependency) and dependency.reference is None and dependency.project_guid in identities:
+                    dependency.project_guid = identities[dependency.project_guid]
+            project.settings.save(data)
         materials = source.root / ".cppbuild/templates"
         if materials.exists():
             _copy_tree(materials, stage / ".cppbuild/templates", exclude=False)
