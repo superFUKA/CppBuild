@@ -171,7 +171,7 @@ solution.update()とproject.update()の全体／個別の入口は確認済み�
 
 | API案 | 相手 |
 | --- | --- |
-| project.settings.link_solution(config_directory, link_type, *, name=None) | 別Solutionの主Projectへリンクし、名前付き参照を所属Solutionへ自動登録 |
+| project.settings.link_solution(config_directory, link_type) | 別Solutionの主Projectへリンクし、GUIDによる参照を所属Solutionへ自動登録 |
 | project.settings.link_project(other_project, link_type) | 同じSolutionに所属するProjectオブジェクト |
 | project.settings.link_package(package) | 外部CMakeパッケージの公開target |
 | project.settings.link_cmake_source(source) | 既存CMakeソースのtarget |
@@ -272,12 +272,13 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 
 ## 2026-09-30追加：GUIDと外部リンクの自動管理
 
-- `link_solution(config_directory, link_type, *, name=None)` は既存の2引数呼び出しを維持。名前省略時は対象Projectの永続GUIDを参照名にする。同名・同GUID・同所在は再利用し、異なる対象・所在との衝突は拒否する。同一Project内の同名・同種類の再登録は従来どおりエラー。別名での登録は許可し、ビルド対象はGUIDと種類で集約する。
-- `ProjectSettingsData.guid` は作成時に生成する不変の識別子。作成設定を流用しても新しいGUIDを発行する。`SolutionSettingsData.references` は参照名から `ProjectReference(project_guid, solution_directory)` への自動管理一覧で、`solution.settings.get().references` からコピーを取得する。通常のSolution設定saveでの一覧変更は拒否する。
-- `unlink(dependency_id)` は利用元Projectの依存を解除し、最後の利用がなくなった参照名を自動削除する。Project登録解除やProject設定saveによる依存削除も同じ規則。対象ファイルは削除しない。事前登録・手動削除のAPIは追加しない。
+- 2026-09-30の追加指示により名前指定を廃止。`link_solution(config_directory, link_type)` の2引数で使用し、`name` 引数は受け付けない。同じ対象GUID・同所在は自動で共用し、同じGUIDの異なる所在は拒否する。同一Project内の同GUID・同種類の再登録はエラー。ビルド対象もGUIDと種類で集約する。
+- `ProjectSettingsData.guid` は作成時に生成する不変の識別子。作成設定を流用しても新しいGUIDを発行する。`SolutionSettingsData.references` は対象GUIDから `ProjectReference(project_guid, solution_directory)` への自動管理一覧で、キーと値のGUIDは一致する。`solution.settings.get().references` からコピーを取得でき、通常のSolution設定saveでの一覧変更は拒否する。
+- 内部・外部とも `Dependency(project_guid, project_type)` を保存する。対象名・参照名・外部パスをProject側の依存に保存しない。外部対象の所在はSolutionの参照一覧から取得し、型付きパスは設定ファイル基準の相対パスで保存する。
+- `unlink(dependency_id)` は利用元Projectの依存を解除し、最後の利用がなくなった対象GUIDの登録を自動削除する。Project登録解除やProject設定saveによる依存削除も同じ規則。対象ファイルは削除しない。事前登録・手動削除のAPIは追加しない。
 - 同一Solution内の `link_project` は引数を維持し、内部の対象識別にGUIDを保存。外部リンクは登録時の主ProjectをGUIDで固定し、以後の主Project変更で対象を切り替えない。`LinkReport` と解除用IDは維持する。
-- 旧ファイルはopen/reload時にGUIDと参照一覧を自動保存して移行する。書き込み権限と旧外部リンク先へのアクセスが必要。移行済みファイルの再読み込みは保存しない。詳細は [設定詳細](SETTINGS_DESIGN.md) を参照。
+- 旧ファイルはopen/reload時にschema_version=3へ移行する。名前付き参照は保存済みGUIDへ統合し、解除用IDは保持する。初回は書き込み権限が必要。対象GUIDが未保存の旧外部リンクにはリンク先へのアクセスも必要。移行済みファイルの再読み込みは保存しない。詳細は [設定詳細](SETTINGS_DESIGN.md) を参照。
 
 ## 2026-09-30追加：設定ファイル基準の相対パス
 
-管理JSONはschema_version=2とし、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。APIの引数は維持し、絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。
+現行の管理JSONはschema_version=3。バージョン2の相対パス形式を維持し、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。

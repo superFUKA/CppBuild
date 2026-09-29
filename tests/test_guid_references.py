@@ -12,7 +12,7 @@ from cppbuild import storage
 from cppbuild.graph import resolve
 
 
-class NamedReferenceTests(unittest.TestCase):
+class GuidReferenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cppbuild-refs-")
         self.addCleanup(temporary.cleanup)
@@ -24,20 +24,41 @@ class NamedReferenceTests(unittest.TestCase):
         self.tool = self.solution.add_project("Tool", "Tool", T.EXECUTABLE)
         self.config = self.provider.root / ".cppbuild"
 
-    def link(self, project=None, **kwargs):
-        return (project or self.app).settings.link_solution(self.config, T.STATIC_LIBRARY, **kwargs)
+    def link(self, project=None):
+        return (project or self.app).settings.link_solution(self.config, T.STATIC_LIBRARY)
 
     def legacy(self, project):
         return storage.envelope("project", storage.manifest(project.settings.path, "project"))
+
+    def named_legacy(self):
+        first, other = self.link(), self.link(self.tool)
+        alias_id = uuid.uuid4().hex
+        raw = storage.read_json(self.solution.settings.path)
+        reference = raw["data"]["references"][self.lib.settings.get().guid]
+        raw["schema_version"] = 2
+        raw["data"]["references"] = {"共有ライブラリ": reference, "Another": reference}
+        storage.atomic_write(self.solution.settings.path, storage.encoded(raw))
+        for project, links in ((self.app, {first.dependency_id: "共有ライブラリ", alias_id: "Another"}),
+                               (self.tool, {other.dependency_id: "共有ライブラリ"})):
+            raw = storage.read_json(project.settings.path)
+            raw["schema_version"] = 2
+            raw["data"]["dependencies"] = {key: {"kind": "project", "values": {
+                "project": "Lib", "project_type": "static_library", "reference": name,
+                "project_guid": None, "solution_directory": None}} for key, name in links.items()}
+            storage.atomic_write(project.settings.path, storage.encoded(raw))
+            for path in project.settings._revision:
+                if path != project.settings.path:
+                    kind = storage.read_json(path)
+                    kind["schema_version"] = 2
+                    storage.atomic_write(path, storage.encoded(kind))
+        return first.dependency_id, alias_id, other.dependency_id
 
     def test_automatic_registry_shared_guid_and_last_unlink(self):
         first, second = self.link(), self.link(self.tool)
         guid = self.lib.settings.get().guid
         self.assertEqual(set(self.solution.settings.get().references), {guid})
         dependency = self.app.settings.get().dependencies[first.dependency_id]
-        self.assertEqual(dependency.reference, guid)
-        self.assertIsNone(dependency.solution_directory)
-        self.assertIsNone(dependency.project_guid)
+        self.assertEqual(dependency, Dependency(guid, T.STATIC_LIBRARY))
         self.assertEqual(len(resolve(self.solution.projects())[1]), 3)
         reopened = Solution.open(self.solution.root / ".cppbuild")
         reopened.get_project("App").settings.unlink(first.dependency_id)
@@ -46,37 +67,140 @@ class NamedReferenceTests(unittest.TestCase):
         self.assertEqual(Solution.open(self.solution.root / ".cppbuild").settings.get().references, {})
         self.assertTrue(self.lib.settings.path.exists())
 
-    def test_aliases_deduplicate_targets_and_prune_independently(self):
-        first = self.link(name="共有ライブラリ")
-        second = self.link(name="Another")
-        self.link(self.tool, name="共有ライブラリ")
+    def test_legacy_aliases_merge_and_preserve_unlink_ids(self):
+        first, second, other = self.named_legacy()
+        self.solution.settings.reload()
+        guid = self.lib.settings.get().guid
+        self.assertEqual(set(self.solution.settings.get().references), {guid})
+        self.assertEqual(set(self.app.settings.get().dependencies), {first, second})
+        self.assertIn(other, self.tool.settings.get().dependencies)
+        for project in (self.app, self.tool):
+            raw = storage.read_json(project.settings.path)
+            self.assertEqual(raw["schema_version"], 3)
+            for entry in raw["data"]["dependencies"].values():
+                self.assertEqual(entry["values"], {"project_guid": guid, "project_type": "static_library"})
+        with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
+            Solution.open(self.solution.root / ".cppbuild")
         roots, nodes = resolve(self.solution.projects())
         self.assertEqual(len(nodes), 3)
         self.assertEqual(len(roots[0].dependencies), 1)
-        self.app.settings.unlink(first.dependency_id)
-        self.assertEqual(len(self.solution.settings.get().references), 2)
+        self.app.settings.unlink(first)
+        self.assertEqual(len(self.solution.settings.get().references), 1)
         self.solution.remove_project("Tool")
-        self.assertEqual(set(self.solution.settings.get().references), {"Another"})
-        self.app.settings.unlink(second.dependency_id)
+        self.assertEqual(set(self.solution.settings.get().references), {guid})
+        self.app.settings.unlink(second)
         self.assertEqual(self.solution.settings.get().references, {})
 
-    def test_conflicting_name_location_duplicate_and_invalid_names(self):
-        self.link(name="Common")
+    def test_shared_names_distinct_guids_and_conflicting_locations(self):
+        self.link()
         other = Solution.create(self.root / "Other", "Other")
-        other.add_project("Lib", "Lib", T.STATIC_LIBRARY)
+        other_lib = other.add_project("Lib", "Lib", T.STATIC_LIBRARY)
+        self.tool.settings.link_solution(other.root / ".cppbuild", T.STATIC_LIBRARY)
         with self.assertRaises(SettingsError):
-            self.tool.settings.link_solution(other.root / ".cppbuild", T.STATIC_LIBRARY, name="Common")
-        with self.assertRaises(SettingsError):
-            self.link(name="Common")
+            self.link()
         copied = self.root / "Copied"
         shutil.copytree(self.provider.root, copied)
         with self.assertRaises(SettingsError):
-            self.tool.settings.link_solution(copied / ".cppbuild", T.STATIC_LIBRARY, name="Copy")
-        for name in ("", " spaced", "line\nbreak", 12, []):
-            with self.subTest(name=name), self.assertRaises(SettingsError):
-                self.link(name=name)
-        self.assertEqual(set(self.solution.settings.get().references), {"Common"})
-        self.assertEqual(self.tool.settings.get().dependencies, {})
+            self.tool.settings.link_solution(copied / ".cppbuild", T.STATIC_LIBRARY)
+        self.assertEqual(set(self.solution.settings.get().references),
+                         {self.lib.settings.get().guid, other_lib.settings.get().guid})
+        self.assertEqual(len(self.tool.settings.get().dependencies), 1)
+
+    def test_name_argument_is_removed_without_writing_settings(self):
+        before = {p: p.read_bytes() for p in self.root.rglob("*.json")}
+        with self.assertRaises(TypeError):
+            self.app.settings.link_solution(self.config, T.STATIC_LIBRARY, name="Common")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob("*.json")})
+
+    def test_internal_and_external_saved_targets_are_guid_only(self):
+        local = self.solution.add_project("Local", "Local", T.STATIC_LIBRARY)
+        internal = self.app.settings.link_project(local, T.STATIC_LIBRARY)
+        external = self.link()
+        saved = storage.read_json(self.app.settings.path)["data"]["dependencies"]
+        for link, target in ((internal, local), (external, self.lib)):
+            self.assertEqual(saved[link.dependency_id]["values"],
+                             {"project_guid": target.settings.get().guid, "project_type": "static_library"})
+
+    def test_failed_alias_migration_restores_files_and_live_state(self):
+        self.named_legacy()
+        expected = self.app.settings.get(), self.solution.settings.get()
+        before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
+        original = storage.atomic_write
+        def fail(path, content):
+            if path == self.solution.settings.path:
+                raise OSError("alias migration failure")
+            original(path, content)
+        with patch("cppbuild.storage.atomic_write", side_effect=fail), self.assertRaises(OSError):
+            self.solution.settings.reload()
+        self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
+        self.assertEqual((self.app.settings.get(), self.solution.settings.get()), expected)
+
+    def test_conflicting_legacy_aliases_do_not_modify_files(self):
+        self.named_legacy()
+        raw = storage.read_json(self.solution.settings.path)
+        raw["data"]["references"]["Another"]["solution_directory"] = "../../Copied/.cppbuild"
+        storage.atomic_write(self.solution.settings.path, storage.encoded(raw))
+        before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
+        with self.assertRaises(SettingsError):
+            Solution.open(self.solution.root / ".cppbuild")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
+
+    def test_current_schema_rejects_aliases_and_named_dependency_fields(self):
+        linked = self.link()
+        expected = self.app.settings.get(), self.solution.settings.get()
+        for path in (self.solution.settings.path, self.app.settings.path):
+            with self.subTest(document=path):
+                original = path.read_bytes()
+                raw = storage.read_json(path)
+                if path == self.solution.settings.path:
+                    entry = raw["data"]["references"].pop(self.lib.settings.get().guid)
+                    raw["data"]["references"]["Alias"] = entry
+                else:
+                    raw["data"]["dependencies"][linked.dependency_id]["values"]["project"] = "Lib"
+                storage.atomic_write(path, storage.encoded(raw))
+                before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
+                with self.assertRaises(SettingsError):
+                    self.solution.settings.reload()
+                self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
+                self.assertEqual((self.app.settings.get(), self.solution.settings.get()), expected)
+                storage.atomic_write(path, original)
+
+    def test_named_migration_uses_saved_guid_when_provider_is_offline(self):
+        self.named_legacy()
+        self.provider.root.rename(self.root / "Unavailable")
+        loaded = Solution.open(self.solution.root / ".cppbuild")
+        self.assertEqual(set(loaded.settings.get().references), {self.lib.settings.get().guid})
+        for dependency in loaded.get_project("App").settings.get().dependencies.values():
+            self.assertEqual(dependency.project_guid, self.lib.settings.get().guid)
+
+    def test_local_and_external_guid_collision_is_rejected(self):
+        self.link()
+        raw = storage.read_json(self.tool.settings.path)
+        raw["data"]["guid"] = self.lib.settings.get().guid
+        storage.atomic_write(self.tool.settings.path, storage.encoded(raw))
+        before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
+        with self.assertRaises(SettingsError):
+            Solution.open(self.solution.root / ".cppbuild")
+        self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
+
+    def test_individual_resolution_migrates_a_legacy_solution_registry(self):
+        self.link()
+        raw = storage.read_json(self.solution.settings.path)
+        raw["schema_version"] = 2
+        entry = raw["data"]["references"].pop(self.lib.settings.get().guid)
+        raw["data"]["references"]["Alias"] = entry
+        storage.atomic_write(self.solution.settings.path, storage.encoded(raw))
+        self.assertEqual({n.project.name for n in resolve([self.app])[1]}, {"Lib", "App"})
+        self.assertEqual(storage.read_json(self.solution.settings.path)["schema_version"], 3)
+
+    def test_guid_dependency_propagates_observation_changes(self):
+        from cppbuild import information
+        local = self.solution.add_project("Local", "Local", T.STATIC_LIBRARY)
+        self.app.settings.link_project(local, T.STATIC_LIBRARY)
+        information.built(self.app, self.app._resolved_build_settings(), ())
+        self.assertEqual(next(p for p in self.solution.info().projects if p.name == "App").build_state, "current")
+        local.add_file("src/changed.cpp", content="int changed;", auto_update=False)
+        self.assertEqual(next(p for p in self.solution.info().projects if p.name == "App").build_state, "stale")
 
     def test_guid_immutable_and_preserved_by_move(self):
         guid = self.lib.settings.get().guid
@@ -147,8 +271,8 @@ class NamedReferenceTests(unittest.TestCase):
     def test_template_new_guids_internal_remap_external_preserved(self):
         local = self.solution.add_project("Local", "Local", T.STATIC_LIBRARY)
         self.app.settings.link_project(local, T.STATIC_LIBRARY)
-        self.link(name="External")
-        self.link(self.tool, name="External")
+        self.link()
+        self.link(self.tool)
         template = TemplateTools.create_solution_template(self.solution, self.root / "Template")
         restored = Solution.create(self.root / "Restored", "Restored", template=template)
         self.assertTrue({p.settings.get().guid for p in self.solution.projects()}.isdisjoint(
@@ -253,13 +377,12 @@ class NamedReferenceTests(unittest.TestCase):
             resolve([reopened.get_project("App")])
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
-    def test_real_shared_target_aliases_move_and_unlink(self):
+    def test_real_shared_target_move_and_unlink(self):
         self.lib.add_file("src/lib.cpp", content="int value() { return 42; }", auto_update=False)
         for project in (self.app, self.tool):
             project.add_file("src/main.cpp", content="int value(); int main() { return value() == 42 ? 0 : 1; }", auto_update=False)
-        a = self.link(name="Common")
-        alias = self.link(name="Alias")
-        self.link(self.tool, name="Common")
+        a = self.link()
+        self.link(self.tool)
         values = self.solution.settings.get()
         values.solution_folders = SolutionFolderSettings()
         self.solution.settings.save(values)
@@ -274,7 +397,6 @@ class NamedReferenceTests(unittest.TestCase):
         report = self.solution.run()
         self.assertTrue(report.success, str(report))
         self.app.settings.unlink(a.dependency_id)
-        self.app.settings.unlink(alias.dependency_id)
         (self.app.root / "src/main.cpp").write_text("int main() { return 0; }", encoding="utf-8")
         self.solution.remove_project("Tool")
         self.assertEqual(self.solution.settings.get().references, {})

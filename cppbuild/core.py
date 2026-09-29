@@ -121,7 +121,7 @@ class ProjectSettings(_Settings):
         for key, dependency in values.dependencies.items():
             if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key):
                 raise SettingsError("Expected dependency id -> Dependency")
-            dependency_data.validate(self.owner, dependency)
+            dependency_data.validate(self.owner, dependency, legacy=legacy)
         _strings(values.project_headers)
         _strings(values.system_headers)
         for header in values.project_headers:
@@ -136,7 +136,7 @@ class ProjectSettings(_Settings):
                 raise SettingsError("Management files cannot be source directories")
 
     def _read(self):
-        raw = storage.manifest(self.path, "project")
+        raw, version = storage.manifest(self.path, "project", with_version=True)
         raw.setdefault("dependencies", {})
         raw.setdefault("project_headers", [])
         raw.setdefault("system_headers", [])
@@ -161,17 +161,16 @@ class ProjectSettings(_Settings):
         if not isinstance(raw["dependencies"], dict):
             raise SettingsError("dependencies must be a mapping")
         for key, data in raw["dependencies"].items():
-            dependencies[key] = dependency_data.decode(data)
+            dependencies[key] = dependency_data.decode(data, legacy=version < storage.CURRENT_SCHEMA)
         values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"])
-        self._validate(values, legacy=True)
+        self._validate(values, legacy=version < storage.CURRENT_SCHEMA)
         return values, revisions
 
     def reload(self):
         self.owner._check_active()
         values, revisions = self._read()
         legacy_paths = any(storage.needs_migration(p) for p in revisions)
-        legacy_links = any(isinstance(d, Dependency) and d.solution_directory is not None
-                           for d in values.dependencies.values())
+        legacy_links = any(isinstance(d, dependency_data.LegacyDependency) for d in values.dependencies.values())
         if values.guid is None or legacy_paths or legacy_links:
             self.owner.solution.settings.reload()
             return
@@ -191,8 +190,12 @@ class ProjectSettings(_Settings):
 
     def _documents(self, values):
         documents, refs = {}, {}
+        # GUID-only initialization of an old external Solution must not recurse
+        # through its legacy links. Keep those documents in v2 until full reload.
+        version = 2 if any(isinstance(d, dependency_data.LegacyDependency)
+                           for d in values.dependencies.values()) else storage.CURRENT_SCHEMA
         for kind, data in values.types.items():
-            content = storage.document(self.path.parent / "types" / "settings.json", kind.value, asdict(data))
+            content = storage.document(self.path.parent / "types" / "settings.json", kind.value, asdict(data), version=version)
             filename = f"{kind.value}-{hashlib.sha256(content).hexdigest()}.json"
             path = self.path.parent / "types" / filename
             refs[kind.value] = filename
@@ -200,7 +203,7 @@ class ProjectSettings(_Settings):
         payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
                    "project_headers": values.project_headers, "system_headers": values.system_headers, "guid": values.guid}
-        documents[self.path] = storage.document(self.path, "project", payload)
+        documents[self.path] = storage.document(self.path, "project", payload, version=version)
         return documents
 
     def _publish(self, values):
@@ -225,7 +228,7 @@ class ProjectSettings(_Settings):
         if not isinstance(link_type, ProjectType) or link_type not in other_project.settings.get().types:
             raise SettingsError("Dependency does not support the requested type")
         values = self.get()
-        dependency = Dependency(other_project.name, link_type, project_guid=other_project.settings.get().guid)
+        dependency = Dependency(other_project.settings.get().guid, link_type)
         if dependency in values.dependencies.values():
             raise SettingsError("Dependency is already registered")
         dependency_id = uuid.uuid4().hex
@@ -248,9 +251,9 @@ class ProjectSettings(_Settings):
         self.save(values)
         return LinkReport(key, getattr(value, "target", getattr(value, "project", "imported")), getattr(value, "project_type", None))
 
-    def link_solution(self, config_directory, link_type, *, name=None):
+    def link_solution(self, config_directory, link_type):
         from .references import link
-        return link(self, config_directory, link_type, name)
+        return link(self, config_directory, link_type)
 
     def link_package(self, package):
         from .models import CMakePackage
@@ -286,12 +289,12 @@ class SolutionSettings(_Settings):
         self.path = owner.root / ".cppbuild" / "project.json"
         self._revision = {}
 
-    def _validate(self, values):
+    def _validate(self, values, *, legacy=False):
         if not isinstance(values, SolutionSettingsData):
             raise SettingsError("Expected SolutionSettingsData")
         _name(values.name)
         from .references import validate as validate_references
-        validate_references(values)
+        validate_references(values, legacy=legacy)
         if not isinstance(values.projects, dict):
             raise SettingsError("projects must be a mapping")
         from .solution_folders import validate
@@ -317,7 +320,7 @@ class SolutionSettings(_Settings):
             material_path(self.owner, filename)
 
     def _read(self):
-        raw = storage.manifest(self.path, "solution")
+        raw, version = storage.manifest(self.path, "solution", with_version=True)
         raw.setdefault("file_templates", {})
         raw.setdefault("solution_folders", None)
         raw.setdefault("references", {})
@@ -334,7 +337,7 @@ class SolutionSettings(_Settings):
             storage.object_fields(folder, {"projects", "linked_projects", "project_folders"})
             raw["solution_folders"] = SolutionFolderSettings(**folder)
         values = SolutionSettingsData(**raw)
-        self._validate(values)
+        self._validate(values, legacy=version < storage.CURRENT_SCHEMA)
         return values
 
     def reload(self):
@@ -644,15 +647,14 @@ class Solution:
             raise SettingsError("Change main_project before removing it")
         for project in self.projects():
             project.settings.reload()
-            if any(isinstance(d, Dependency) and d.solution_directory is None and d.reference is None
-                   and (d.project_guid == self.get_project(name).settings._data.guid if d.project_guid else d.project == name)
+            if any(isinstance(d, Dependency) and d.project_guid == self.get_project(name).settings._data.guid
                    for d in project.settings._data.dependencies.values()):
                 raise SettingsError("Unlink references before removing this Project")
         del values.projects[name]
         if values.solution_folders is not None:
             values.solution_folders.project_folders.pop(name, None)
-        used = {d.reference for p in self.projects() if p.name != name
-                for d in p.settings._data.dependencies.values() if isinstance(d, Dependency) and d.reference is not None}
+        used = {d.project_guid for p in self.projects() if p.name != name
+                for d in p.settings._data.dependencies.values() if isinstance(d, Dependency)}
         values.references = {k: v for k, v in values.references.items() if k in used}
         with ExitStack() as locks:
             locks.enter_context(storage.write_lock(self.settings.path.parent))

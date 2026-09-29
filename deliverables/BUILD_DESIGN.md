@@ -166,7 +166,7 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 
 ## 2026-09-30追加：GUIDによる依存の集約
 
-外部Dependencyの参照名を所属Solutionのreferencesで解決し、外部Projectを保存済みGUIDで選ぶ。依存ノードはGUIDと種類で重複排除し、同じGUIDの異なる所在はエラーにする。別名・複数利用元で共有する依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。
+Dependencyのproject_guidを所属Solutionのreferencesで検索し、登録があれば外部Solutionの同GUID、なければ所属Projectの同GUIDを選ぶ。同じGUIDのローカル・外部登録は拒否する。依存ノードはGUIDと種類で重複排除し、同じGUIDの異なる所在はエラーにする。複数利用元や旧別名から移行した依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。移行済み設定の個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。旧形式の初回移行はSolution全体で行う。
 
 ## 2026-09-30追加：移設可能な管理パスと構成の引き継ぎ
 

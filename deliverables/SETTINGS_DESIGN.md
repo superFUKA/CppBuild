@@ -114,16 +114,18 @@ gtest_discover_testsはビルド済みテスト実行ファイルを使う。upd
 
 SolutionSettingsDataに `solution_folders` を追加。`None` または `SolutionFolderSettings`（`projects`、`linked_projects`、`project_folders`）を保存する。旧管理ファイルで項目がない場合は `None` として読む。ビルド設定には含めない。設定のコピー分離・検証・競合検出は既存のget/saveに従う。テンプレートに含め、登録解除時にそのProjectの配置指定を除く。
 
-## 2026-09-30追加：GUIDと名前付き参照の保存
+## 2026-09-30更新：GUIDによる参照の保存（schema_version=3）
 
 - Project管理ファイルにUUID形式の `guid` を保存する。新規作成で発行し、通常saveでの変更は禁止。Project移動で保持し、テンプレート作成・復元では所属Projectごとに新規発行して内部依存を付け替える。
-- Solution管理ファイルの `references` に参照名と対象GUID・外部Solutionの管理ディレクトリを保存する。新規リンク時の所在はAPI上でSolutionルート相対、保存JSONでは設定ファイル相対へ正規化。Projectの外部 `Dependency` は `reference` に登録名を保持し、`solution_directory` / `project_guid` はNoneとする。`project` は登録時の名前、`project_type` は使用する種類。内部Dependencyは `project_guid` を保持する。
-- 参照の利用数を別途保存せず、所属Projectの依存一覧から算出する。最後の依存の解除・Project登録解除で参照名を自動削除する。別名はそれぞれ独立して整理する。
+- Solution管理ファイルの `references` は対象GUIDをキーに、`ProjectReference(project_guid, solution_directory)` を保存する。キーと値のGUIDは一致させる。所在はAPI上でSolutionルート相対、保存JSONでは設定ファイル相対へ正規化する。Projectの内部・外部 `Dependency` は `project_guid` と `project_type` だけを保存し、対象名・参照名・所在は保持しない。
+- 参照の利用数を別途保存せず、所属Projectの依存一覧から算出する。最後の依存の解除・Project登録解除で対象GUIDの登録を自動削除する。同じGUIDは全利用元で一つの登録を共用する。
 - 依存保存時はSolutionと全所属Projectのロック・設定指紋を確認し、変更したProjectとSolutionの文書をまとめて公開する。通常の書き込み失敗では公開済み文書を復元し、メモリ上の状態は成功後に更新する。強制終了・停電をまたぐ自動復旧は対象外。
-- schema_version=1の旧設定はopen/reload時に自動移行する。GUID未保存のProjectにGUIDを付与し、外部パスをSolutionの一覧へ集約。既存dependency_idを保持する。外部リンク先のGUID付与はリンク先Solution単位で行い、利用側の移行が失敗しても完了済みのリンク先GUIDは保持する。移行後の再読み込みでは書き込まない。
+- schema_version=1/2はopen/reload時に3へ自動移行する。GUID未保存のProjectにGUIDを付与し、外部パスをSolutionの一覧へ集約。名前付き参照は保存済みGUIDへ統合する。同じ対象への複数の旧別名も一つの登録になる。既存dependency_idをすべて保持するため、同じGUID・種類の依存が複数残る場合も、全解除まで登録を保持する。
+- 名前付き参照に対象GUIDが保存済みなら、参照先がオフラインでも名前の移行は可能。GUIDが未保存の旧外部リンクには参照先へのアクセスが必要。循環する旧リンクのGUID付与はリンク移行と分離し、未解決の旧リンクを持つ文書は一時的にバージョン2のまま保持する。利用側の移行が失敗しても完了済みのリンク先GUID付与は保持する。移行後の再読み込みでは書き込まない。
+- バージョン3は参照一覧のGUID不一致と依存内の旧名前フィールドを拒否する。GUIDをローカルProjectと外部対象に重複登録することも拒否する。
 - コピーで同じGUIDが別所在に現れた場合は、参照登録または依存解決で衝突として拒否する。外部Solution全体の移動先の自動探索・専用の所在更新APIは追加しない。相対配置が変わる場合は全利用元でunlink後、新しいパスへ再リンクする。利用側と外部Solutionの相対配置を保った一括移設は設定変更不要。外部Solution内のProject移動はGUIDで追跡する。
 
-## 2026-09-30追加：相対パスの保存形式（schema_version=2）
+## 2026-09-30追加：相対パスの保存形式（schema_version=2以降）
 
 パス文字列は `/` 区切りで、値を保存するJSONの親ディレクトリからの相対パスとする。APIの入力基準は変更しない。保存JSONを読み込んでgetで返す型付きパスはSolution／Projectルート相対で、絶対パスを入力した場合もJSONでは相対化する。
 
@@ -133,7 +135,7 @@ SolutionSettingsDataに `solution_folders` を追加。`None` または `Solutio
 | Projectの `.cppbuild/project.json` | source_directories=`../src`、project_headers=`../include/pch.hpp`、types=`types/<種類とハッシュ>.json`、外部ライブラリ等も同ファイル基準 |
 | Projectの `.cppbuild/types/<種類とハッシュ>.json` | include_directories=`../../include` |
 
-schema_version=1は従来の基準で読み、型付き絶対パスを相対化して既存の文書公開・失敗復元処理で移行する。GUID・dependency_id・リンク名は保持する。移行済みの再読み込みは保存しない。種類別ファイルは新しい内容のファイルを先に作り、Projectの参照を切り替える。旧種類ファイルの自動削除は行わない。
+schema_version=1は従来の基準で読み、型付き絶対パスを相対化して既存の文書公開・失敗復元処理で移行する。GUID・dependency_idは保持し、旧リンク名はGUIDへ変換する。移行済みの再読み込みは保存しない。種類別ファイルは新しい内容のファイルを先に作り、Projectの参照を切り替える。旧種類ファイルの自動削除は行わない。
 
 相対化できない別ドライブ／別共有への参照は拒否し、絶対パスへ暗黙に戻さない。移行は元の配置で実施する。すでに別環境へ移された旧絶対パスから、新しい対応先を推測することはしない。
 

@@ -110,10 +110,7 @@ def _portable(project, data):
     for kind in data.types.values():
         kind.include_directories = [internal(v) for v in kind.include_directories]
     for value in data.dependencies.values():
-        if isinstance(value, Dependency) and value.solution_directory is not None:
-            # External Solutions remain external and are not included in a snapshot.
-            value.solution_directory = str((project.root / value.solution_directory).resolve())
-        elif isinstance(value, (CMakeSource, CMakePackage)):
+        if isinstance(value, (CMakeSource, CMakePackage)):
             value.directory = dependency_path(value.directory)
         elif isinstance(value, ImportedLibrary):
             value.locations = {k: dependency_path(v) for k, v in value.locations.items()}
@@ -152,7 +149,7 @@ def _snapshot(solution, destination, name, *, template):
         for project in clone.projects():
             data = project.settings.get()
             for dependency in data.dependencies.values():
-                if isinstance(dependency, Dependency) and dependency.reference is None and dependency.project_guid in identities:
+                if isinstance(dependency, Dependency) and dependency.project_guid in identities:
                     dependency.project_guid = identities[dependency.project_guid]
             project.settings.save(data)
         materials = source.root / ".cppbuild/templates"

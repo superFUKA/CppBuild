@@ -208,3 +208,16 @@ M5〜M6は未完了。GoogleTest・テンプレート・イベントは後続。
 - 自己レビュー：JSONとAPIのパス基準、種類別ファイルの参照・指紋、移行の復元と再読み込み、テンプレートの最終配置、Project移動、構成の引き継ぎを確認。API・保存仕様・利用手順・要件・設計・進捗を更新した。
 - 制約：移設前に旧設定を読み込んで移行し、利用側と依存先の相対配置を維持する。すでに移設された旧絶対パスから新しい所在を推測しない。既存CMakeキャッシュ・生成物・所有マーカーは移設先へ持ち込まず再生成する。定義・任意引数・外部CMakeListsやソース本文のパスは書き換えない。移行後の未参照の旧種類ファイルは自動削除しない。成功した全ビルドの警告一覧採取とVS IDEのGUI確認は未実施。
 - 名前付きリンク機能は `17428b9` でコミット・push済み。過去の機能コミットの粒度と照合し、今回の相対パス変更・レビュー修正・テスト・関連資料を一つにまとめ、本記録を含むコミットで完了とする。残る実装・自動試験作業はなし。既存のアクセス不能な `relocation-check-l3g0bdd1/` は変更せず、コミット対象から除外する。
+
+## 2026-09-30：link_solutionの名前指定を廃止しGUIDへ統一
+
+- ユーザーの追加指示により `project.settings.link_solution(config_directory, link_type)` の2引数へ変更し、`name` 引数を削除した。`name=` を渡すと保存前にTypeErrorとなり、設定ファイルは変更しない。
+- 管理JSONをschema_version=3へ更新。`Dependency` は内部・外部とも `project_guid` と `project_type` だけを保存する。`SolutionSettingsData.references` は対象GUIDをキーとし、キーと値の `project_guid` の一致を検査する。バージョン2の設定ファイル基準の相対パス形式は維持。
+- 同じ対象GUID・同所在は自動で共用し、同じGUIDの異なる所在、ローカルProjectと外部参照のGUID重複は拒否する。同一Projectへの同GUID・同種類の再登録はエラー。ビルド・全体.sln・info・無効化の伝播もGUIDで対象を特定する。
+- 旧schema_version=1/2はopen/reload時に3へ移行。旧名前付き参照は保存済みGUIDへ統合し、別名由来の重複依存の解除用dependency_idをすべて保持する。GUID保存済みの旧別名は参照先がオフラインでも移行でき、GUID未保存の旧外部リンクは参照先が必要。循環する旧外部リンクは未解決のLegacyDependencyを持つ文書をバージョン2のまま保持し、全体のreload時に移行する。個別の依存解決でも旧Solution参照一覧を移行してから読み込む。現行バージョンでの名前付き参照・旧依存フィールドは拒否する。
+- 試験：`tests/test_named_references.py`（16件）を `tests/test_guid_references.py`（25件、うち実VS2022試験1件）へ置き換え、name引数の削除、GUIDのみの保存、旧別名の統合と解除ID保持、衝突する旧別名、オフライン移行、ローカル／外部GUID衝突、現行形式での旧フィールド拒否、移行失敗時の復元を追加。`test_relative_paths.py` を新形式に合わせて更新。
+- 最終検証：`CPPBUILD_TEST_VS2022=1`、SHA256一致（`1f357c27…00e4`）を確認した既存GoogleTest 1.14.0 ZIP、既定のTEMP/TMPで `python -m unittest discover -s tests -v`。全110件成功（通常95件・実VS2022試験15件・skipなし）、140.281秒。ログは `.test-work/guid-tests-final2.log`。`git diff --check` 成功。
+- 検証中の事象：TEMP/TMPを `.test-work` 配下に指定した1回目の全件実行では、`test_relative_paths` の2件が失敗（移設試験でのディレクトリ改名のアクセス拒否、日本語・空白を含むパスでのCMakeコンパイラー確認時にMSBuildのtlogディレクトリが見つからないMSB6003）。同じコードのまま既定のTEMPで該当9件と全件を再実行し、すべて成功した。一時ディレクトリの配置に起因する環境要因と判断し、製品コードは変更していない。ログは `.test-work/guid-tests-final.log`。
+- 自己レビュー：旧フィールドの参照箇所（graph・information・paths・relocation・templates・core）がGUIDへ置き換わっていること、LegacyDependencyが移行経路に限定されることを確認。API・保存形式・利用手順・要件・設計選択へ反映済み。
+- 制約：既存の名前付きリンク機能（`17428b9`）で `name=` を使っていた呼び出しは引数の削除が必要。旧形式の初回移行には書き込み権限が必要。VS IDEのGUI確認と別PCでの試験は未実施。
+- 相対パス保存は `a8a1d78` でコミット済み。本記録を含むコミットで完了とする。既存のアクセス不能な `relocation-check-l3g0bdd1/` は変更せず、コミット対象から除外する。

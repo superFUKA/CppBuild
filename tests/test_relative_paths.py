@@ -22,7 +22,7 @@ class RelativePathTests(unittest.TestCase):
         self.lib = self.provider.add_project("Lib", "Lib", T.STATIC_LIBRARY)
         self.consumer = Solution.create(self.bundle / "Consumer", "Consumer")
         self.app = self.consumer.add_project("App", "App", T.EXECUTABLE)
-        self.app.settings.link_solution(self.provider.root / ".cppbuild", T.STATIC_LIBRARY, name="Common")
+        self.app.settings.link_solution(self.provider.root / ".cppbuild", T.STATIC_LIBRARY)
 
     def add_paths(self):
         data = self.app.settings.get()
@@ -40,7 +40,7 @@ class RelativePathTests(unittest.TestCase):
 
     def assert_document(self, path, kind):
         raw = storage.read_json(path)
-        self.assertEqual(raw["schema_version"], 2)
+        self.assertEqual(raw["schema_version"], 3)
         self.assertEqual(raw["kind"], kind)
         self.assertNotIn(str(self.root), path.read_text(encoding="utf-8"))
         return raw["data"]
@@ -67,7 +67,7 @@ class RelativePathTests(unittest.TestCase):
         solution = self.assert_document(self.consumer.settings.path, "solution")
         self.assertEqual(solution["projects"]["App"], "../App")
         self.assertEqual(solution["file_templates"]["Header"], "templates/Header.hpp")
-        reference = solution["references"]["Common"]["solution_directory"]
+        reference = solution["references"][self.lib.settings.get().guid]["solution_directory"]
         self.assertFalse(PureWindowsPath(reference).is_absolute())
         self.assertEqual((self.consumer.settings.path.parent / reference).resolve(), self.provider.root / ".cppbuild")
         project = self.assert_document(self.app.settings.path, "project")
@@ -99,7 +99,7 @@ class RelativePathTests(unittest.TestCase):
             self.assertEqual(loaded.get_project("App").settings.get().guid, self.app.settings.get().guid)
             # Registering another consumer still reuses the relocated reference.
             tool = loaded.add_project("Tools/Tool", "Tool", T.EXECUTABLE)
-            tool.settings.link_solution(moved / "Provider/.cppbuild", T.STATIC_LIBRARY, name="Common")
+            tool.settings.link_solution(moved / "Provider/.cppbuild", T.STATIC_LIBRARY)
             self.assertEqual(len(loaded.settings.get().references), 1)
 
     def test_template_at_different_depth_keeps_external_targets_after_transplant(self):
@@ -149,8 +149,8 @@ class RelativePathTests(unittest.TestCase):
         self.assertEqual(loaded.get_project("App").settings.get(), expected)
         for project in loaded.projects():
             for filename in project.settings._revision:
-                self.assertEqual(storage.read_json(filename)["schema_version"], 2)
-        self.assertEqual(storage.read_json(loaded.settings.path)["schema_version"], 2)
+                self.assertEqual(storage.read_json(filename)["schema_version"], 3)
+        self.assertEqual(storage.read_json(loaded.settings.path)["schema_version"], 3)
         with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
             Solution.open(loaded.root / ".cppbuild")
         moved = self.root / "Migrated"
@@ -172,7 +172,7 @@ class RelativePathTests(unittest.TestCase):
         self.assertEqual(before, {p: p.read_bytes() for p in self.consumer.root.rglob("*.json")})
 
     def test_nested_type_files_keep_project_relative_api_paths(self):
-        for version in (1, 2):
+        for version in (1, 2, 3):
             with self.subTest(schema_version=version):
                 solution = Solution.create(self.root / f"NestedV{version}", "Nested")
                 project = solution.add_project("App", "App", T.EXECUTABLE)
@@ -194,7 +194,7 @@ class RelativePathTests(unittest.TestCase):
                 app = loaded.get_project("App")
                 self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])
                 for filename in app.settings._revision:
-                    self.assertEqual(storage.read_json(filename)["schema_version"], 2)
+                    self.assertEqual(storage.read_json(filename)["schema_version"], 3)
                 with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
                     app.settings.reload()
                 self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])
@@ -212,12 +212,15 @@ class RelativePathTests(unittest.TestCase):
                 self.assertEqual(self.app.settings.get(), expected)
                 self.assertEqual(before, {p: p.read_bytes() for p in self.consumer.root.rglob("*.json")})
 
-    def test_v2_rejects_absolute_paths_and_other_drive_is_not_silently_saved(self):
+    def test_stored_absolute_paths_and_other_drive_are_rejected(self):
         raw = storage.read_json(self.consumer.settings.path)
-        raw["data"]["references"]["Common"]["solution_directory"] = str(self.provider.root / ".cppbuild")
-        storage.atomic_write(self.consumer.settings.path, storage.encoded(raw))
-        with self.assertRaises(SettingsError):
-            Solution.open(self.consumer.root / ".cppbuild")
+        raw["data"]["references"][self.lib.settings.get().guid]["solution_directory"] = str(self.provider.root / ".cppbuild")
+        for version in (2, 3):
+            with self.subTest(schema_version=version):
+                raw["schema_version"] = version
+                storage.atomic_write(self.consumer.settings.path, storage.encoded(raw))
+                with self.assertRaises(SettingsError):
+                    Solution.open(self.consumer.root / ".cppbuild")
         # Use a fresh valid Solution for the input-path check.
         other = Solution.create(self.root / "Other", "Other")
         app = other.add_project("App", "App", T.EXECUTABLE)

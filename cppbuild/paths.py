@@ -3,7 +3,8 @@ from copy import deepcopy
 import os
 from pathlib import Path, PureWindowsPath
 
-from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, SettingsError
+from .dependencies import LegacyDependency
+from .models import CMakePackage, CMakeSource, ImportedLibrary, SettingsError
 
 
 TYPE_KINDS = {"static_library", "shared_library", "executable", "header_only", "test"}
@@ -22,7 +23,7 @@ def project_values(values, convert):
     for kind in values.types.values():
         kind.include_directories = [convert(p) for p in kind.include_directories]
     for dependency in values.dependencies.values():
-        if isinstance(dependency, Dependency) and dependency.solution_directory is not None:
+        if isinstance(dependency, LegacyDependency) and dependency.solution_directory is not None:
             dependency.solution_directory = convert(dependency.solution_directory)
         elif isinstance(dependency, (CMakePackage, CMakeSource)):
             dependency.directory = convert(dependency.directory)
@@ -115,8 +116,8 @@ def encode(path, kind, payload):
 def decode(path, kind, payload, version, *, root=None):
     path = Path(path)
     root = root_for(path, kind) if root is None else Path(root)
-    before = path.parent if version == 2 else root
-    data = transform(kind, payload, lambda value: rebase(value, before, root, stored=version == 2))
-    if kind == "project" and version == 2:
+    before = path.parent if version >= 2 else root
+    data = transform(kind, payload, lambda value: rebase(value, before, root, stored=version >= 2))
+    if kind == "project" and version >= 2:
         _mapping(data, "types", lambda value: rebase(value, path.parent, path.parent / "types", stored=True))
     return data

@@ -40,8 +40,8 @@ def signature(project, settings=None, seen=None):
         raise SettingsError("Dependency cycle in observed settings")
     dependencies = []
     for value in project.settings._data.dependencies.values():
-        if isinstance(value, Dependency) and value.solution_directory is None and value.reference is None:
-            child = project.solution._projects.get(value.project)
+        if isinstance(value, Dependency) and value.project_guid not in project.solution.settings._data.references:
+            child = next((p for p in project.solution.projects() if p.settings._data.guid == value.project_guid), None)
             if child is None:
                 raise SettingsError("Dependency no longer registered")
             dependencies.append(signature(child, child._resolved_build_settings(value.project_type), seen | {key}))
@@ -71,7 +71,7 @@ def invalidate(project, *, bump=True):
             return
         seen.add(changed.name)
         for other in project.solution.projects():
-            if any(isinstance(d, Dependency) and d.solution_directory is None and d.reference is None and d.project == changed.name
+            if any(isinstance(d, Dependency) and d.project_guid == changed.settings._data.guid
                    for d in other.settings._data.dependencies.values()):
                 other._build_state = "stale" if other._build_signature is not None else "unknown"
                 visit(other)

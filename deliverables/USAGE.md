@@ -118,32 +118,29 @@ report = solution.update()
 
 保存・再open・テンプレート復元で表示設定を保持する。Project登録解除時は対応する配置設定も削除する。`settings.solution_folders = None` を保存して全体updateすると、従来の依存Projectのみの階層なし表示へ戻る。個別Projectのupdateでは全体表示を変更しない。
 
-# 名前付きリンクの自動管理（2026-09-30追加）
+# GUIDによるリンクの自動管理（2026-09-30更新）
 
 ```python
 from cppbuild import ProjectType
 
-# 呼び出すだけで所属Solutionに参照を登録。省略時の名前は対象ProjectのGUID。
+# 呼び出すだけで、対象ProjectのGUIDを所属Solutionに登録する。
 a = app_a.settings.link_solution(external_config, ProjectType.STATIC_LIBRARY)
 b = app_b.settings.link_solution(external_config, ProjectType.STATIC_LIBRARY)
 references = solution.settings.get().references  # 参照は1件、利用元は2つ
 
-# 任意名で同じ対象への別の参照を登録することもできる。
-alias = app_a.settings.link_solution(
-    external_config, ProjectType.STATIC_LIBRARY, name="Common"
-)
-app_a.settings.unlink(a.dependency_id)  # app_bが使用中なのでGUID名の登録を保持
-app_b.settings.unlink(b.dependency_id)  # 最後の利用なのでGUID名の登録を自動削除
-app_a.settings.unlink(alias.dependency_id)  # Commonも自動削除
+target_guid = app_a.settings.get().dependencies[a.dependency_id].project_guid
+target_config = references[target_guid].solution_directory
+app_a.settings.unlink(a.dependency_id)  # app_bが使用中なので登録を保持
+app_b.settings.unlink(b.dependency_id)  # 最後の利用なので登録を自動削除
 ```
 
-名前は大文字・小文字を区別する空でない文字列。同名・同じ対象GUID・同所在なら共用する。同名の異なる対象や、同じGUIDの異なる所在はエラー。同じProjectに同名・同種類を二度追加することはできない。別名で同じ対象を追加しても、ビルド・全体.slnではGUIDと種類に基づき一つに集約する。単一の利用Projectから同じ対象の異なる種類をリンクすることは従来どおり不可。
+名前指定は廃止したため、`name=` を渡していた呼び出しは引数を削除する。同じ対象GUID・同所在は共用し、同じGUIDの異なる所在はエラー。同じProjectへ同GUID・同種類を二度追加することはできない。ビルド・全体.slnでもGUIDと種類に基づき一つに集約する。単一の利用Projectから同じ対象の異なる種類をリンクすることは従来どおり不可。
 
 GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡した設定のGUIDを引き継がず、新しいGUIDを発行する。Project移動はGUIDを保持するので、既存リンクは移動後も同じProjectを参照する。テンプレートから新規作成した所属Projectは新しいGUIDになるが、外部への参照は維持する。
 
 Projectの登録解除でも未使用になった参照を自動削除する。依存の変更を生成物へ反映する際は、従来どおりupdate/buildを呼ぶ。リンク先のファイルや成果物は削除しない。
 
-旧管理ファイルはopen/reload時に自動保存して移行するため、初回は書き込み権限と旧外部リンク先が必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
+旧管理ファイルはopen/reload時にschema_version=3へ自動保存して移行する。旧別名を同じ対象GUIDへ統合し、解除用IDはすべて維持する。初回は書き込み権限が必要で、対象GUIDが未保存の旧外部リンクはリンク先も必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
 
 # 別の環境への移設と相対パス（2026-09-30追加）
 
@@ -159,7 +156,7 @@ Workspace/
 
 Workspace全体を別の場所へ移してから `Solution.open(new_workspace / "Consumer/.cppbuild")` すれば、移設先のProviderを参照する。ソース、include、PCH、共有素材、CMakeソース／パッケージ、ImportedLibraryのDLL・LIB・includeも同じ方式で保存する。利用側と依存先の相対配置を維持すること。
 
-- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=2へ自動移行してから移す。初回は設定の書き込み権限が必要。
+- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=3へ自動移行してから移す。初回は設定の書き込み権限が必要。
 - `.cppbuild/build`・`.cppbuild/generated` の既存CMakeキャッシュや生成物は移設先へ持ち込まず、移設先でupdate/buildして再生成する。テンプレート機能はこれらを除外する。
 - ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
 - 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。

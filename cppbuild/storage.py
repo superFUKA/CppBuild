@@ -13,6 +13,9 @@ import tempfile
 from .models import SettingsConflictError, SettingsError
 
 
+CURRENT_SCHEMA = 3
+
+
 def encoded(value):
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
@@ -96,22 +99,23 @@ def object_fields(value, required):
         raise SettingsError(f"Expected fields: {sorted(required)}")
 
 
-def manifest(path, kind, *, root=None):
+def manifest(path, kind, *, root=None, with_version=False):
     result = read_json(path)
     object_fields(result, {"schema_version", "kind", "data"})
-    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2} or result["kind"] != kind:
+    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2, 3} or result["kind"] != kind:
         raise SettingsError(f"Unsupported schema or document kind: {path}")
     from .paths import decode
-    return decode(path, kind, result["data"], result["schema_version"], root=root)
+    data = decode(path, kind, result["data"], result["schema_version"], root=root)
+    return (data, result["schema_version"]) if with_version else data
 
 
-def document(path, kind, data):
+def document(path, kind, data, *, version=CURRENT_SCHEMA):
     from .paths import encode
-    return encoded({"schema_version": 2, "kind": kind, "data": encode(path, kind, data)})
+    return encoded({"schema_version": version, "kind": kind, "data": encode(path, kind, data)})
 
 
 def needs_migration(path):
-    return read_json(path).get("schema_version") == 1
+    return read_json(path).get("schema_version") < CURRENT_SCHEMA
 
 
 def envelope(kind, data):

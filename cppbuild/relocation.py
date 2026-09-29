@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 
 from . import information, storage
-from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, INHERIT, SettingsError
+from .models import CMakePackage, CMakeSource, ImportedLibrary, INHERIT, SettingsError
 
 
 def _plain_path(path):
@@ -50,10 +50,7 @@ def _settings(project, after, source, destination):
     for data in values.types.values():
         data.include_directories = [path(p) for p in data.include_directories]
     for dependency in values.dependencies.values():
-        if isinstance(dependency, Dependency):
-            if dependency.solution_directory is not None:
-                dependency.solution_directory = path(dependency.solution_directory)
-        elif isinstance(dependency, (CMakePackage, CMakeSource)):
+        if isinstance(dependency, (CMakePackage, CMakeSource)):
             dependency.directory = path(dependency.directory)
         elif isinstance(dependency, ImportedLibrary):
             dependency.locations = {k: path(v) for k, v in dependency.locations.items()}
@@ -130,8 +127,7 @@ def move_project(solution, name, destination, *, auto_update=True):
     _plain_tree(source)
     _plain_path(solution.root / ".cppbuild/relocations")
 
-    # Prepare and validate every change before touching files. Internal links use
-    # names; only typed filesystem paths need rebasing, never arbitrary strings.
+    # Internal links use GUIDs; only typed filesystem paths need rebasing.
     prepared = []
     for member in solution.projects():
         _plain_path(member.settings.path)

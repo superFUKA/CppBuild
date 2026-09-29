@@ -28,11 +28,8 @@ class TypeSettingsData:
 
 @dataclass
 class Dependency:
-    project: str
+    project_guid: str
     project_type: ProjectType
-    solution_directory: str | None = None
-    reference: str | None = None
-    project_guid: str | None = None
 
 
 @dataclass

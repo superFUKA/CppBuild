@@ -36,6 +36,9 @@ def resolve(projects, *, include_external_members=False):
             project.settings.reload()
             loaded.add(project)
         if project.solution not in registries:
+            from . import storage
+            if storage.needs_migration(project.solution.settings.path):
+                project.solution.settings.reload()
             registries[project.solution] = project.solution.settings._read().references
         settings = project._resolved_build_settings(requested)
         project_guid = project.settings._data.guid
@@ -54,24 +57,19 @@ def resolve(projects, *, include_external_members=False):
                 continue
             try:
                 solution = project.solution
-                if reference.reference is not None:
+                from .references import target
+                if reference.project_guid in registries[solution]:
                     from .core import Solution
-                    from .references import target
-                    entry = registries[solution][reference.reference]
+                    entry = registries[solution][reference.project_guid]
                     config = (solution.root / entry.solution_directory).resolve()
                     if config not in external:
                         external[config] = Solution.open(config)
                         if config in overrides:
                             external[config].set_build_settings(overrides[config])
                     solution = external[config]
-                    other = target(solution, entry.project_guid)
-                elif reference.project_guid is not None:
-                    from .references import target
-                    other = target(solution, reference.project_guid)
-                else:
-                    other = solution.get_project(reference.project)
+                other = target(solution, reference.project_guid)
             except KeyError as exc:
-                raise SettingsError(f"Missing dependency Project: {reference.project}") from exc
+                raise SettingsError(f"Missing dependency Project GUID: {reference.project_guid}") from exc
             child = visit(other, reference.project_type)
             if any(d.project.root == child.project.root and d.settings.project_type != child.settings.project_type for d in node.dependencies):
                 raise SettingsError("One consumer cannot link multiple kinds of the same Project")
