@@ -77,6 +77,12 @@ def _build_settings(value, seen=None):
         for names in (value.build_projects, value.run_projects, value.test_projects):
             if names is not None and len(set(names)) != len(names):
                 raise SettingsError("Duplicate Project selection")
+        if not isinstance(value.project_types, dict):
+            raise SettingsError("project_types must be a mapping")
+        for project_guid, kind in value.project_types.items():
+            dependency_data.guid(project_guid)
+            if not isinstance(kind, ProjectType) or kind not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}:
+                raise SettingsError("project_types switches only between STATIC_LIBRARY and SHARED_LIBRARY")
         if not isinstance(value.external_build_settings, dict):
             raise SettingsError("external_build_settings must be a mapping")
         for directory, data in value.external_build_settings.items():
@@ -348,6 +354,15 @@ class SolutionSettings(_Settings):
             roots.add(root)
         if values.main_project is not None and (not isinstance(values.main_project, str) or values.main_project not in values.projects):
             raise SettingsError("main_project must refer to a member")
+        _strings(values.dependency_directories)
+        seen = set()
+        for directory in values.dependency_directories:
+            path = storage.contained(self.owner.root, directory)
+            if path == self.owner.root or path.is_relative_to(self.path.parent) or path in seen:
+                raise SettingsError("Dependency directories must be distinct subdirectories of the Solution")
+            if any(path.is_relative_to(r) or r.is_relative_to(path) for r in roots):
+                raise SettingsError("Dependency directories cannot overlap member Projects")
+            seen.add(path)
         if not isinstance(values.file_templates, dict):
             raise SettingsError("file_templates must be a mapping")
         from .templates import material_path
@@ -362,7 +377,9 @@ class SolutionSettings(_Settings):
         raw.setdefault("file_templates", {})
         raw.setdefault("solution_folders", None)
         raw.setdefault("references", {})
-        storage.object_fields(raw, {"name", "projects", "main_project", "file_templates", "solution_folders", "references"})
+        raw.setdefault("dependency_directories", [])
+        storage.object_fields(raw, {"name", "projects", "main_project", "file_templates", "solution_folders", "references",
+                                    "dependency_directories"})
         if not isinstance(raw["references"], dict):
             raise SettingsError("references must be a mapping")
         for name, reference in raw["references"].items():
@@ -421,7 +438,11 @@ class SolutionSettings(_Settings):
         return ChangeReport((str(self.path),))
 
     def _document(self, values):
-        return storage.document(self.path, "solution", asdict(values))
+        data = asdict(values)
+        if not data["dependency_directories"]:
+            # Written only when used, so existing files keep their bytes.
+            del data["dependency_directories"]
+        return storage.document(self.path, "solution", data)
 
     def set_file_template(self, name, template_file):
         from .templates import material_path
@@ -467,11 +488,22 @@ class Project:
             raise SettingsError("Selected type is not supported by the Project")
         self._build_settings = deepcopy(values)
 
-    def _resolved_build_settings(self, requested_type=None):
+    def _resolved_build_settings(self, requested_type=None, project_types=None):
+        """requested_type is the saved link type; project_types the operation's GUID overrides."""
         self._check_active()
         values = deepcopy(self._build_settings)
+        overrides = self.solution._build_settings.project_types if project_types is None else project_types
+        forced = overrides.get(self.settings._data.guid)
+        if forced is not None and forced not in self.settings._data.types:
+            raise SettingsError(f"project_types selects a type {self.name} does not have")
+        linkable = {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}
         if requested_type is not None:
-            values.project_type = requested_type
+            # A static/shared link follows the operation's override, then the dependency's
+            # own selection; interface links and interface selections keep the saved type.
+            chosen = forced or values.project_type
+            values.project_type = chosen if chosen in linkable and requested_type in linkable else requested_type
+        elif forced is not None and (values.project_type or self.settings._data.initial_type) in linkable:
+            values.project_type = forced
         for key in ("configuration", "architecture", "cpp_standard", "tools", "cmake"):
             if getattr(values, key) is INHERIT:
                 setattr(values, key, deepcopy(getattr(self.solution._build_settings, key)))

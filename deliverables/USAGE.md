@@ -200,7 +200,7 @@ INTERFACE_LIBRARYは自身のライブラリバイナリを生成せず、イン
 
 ライブラリのtypesには3形式それぞれのTypeSettingsDataを保持する。作成・旧設定移行時に不足形式を既定設定で補い、既存形式の設定は保持する。別形式のinclude_directoriesや定義を自動コピーしないため、必要に応じて種類別設定を変更する。saveで形式の一部を削除したり、実行ファイルやTESTへ変換したりすることはできない。
 
-依存の形式はlink_project/link_solutionの第2引数で固定される。提供側のproject_typeを変えても利用側の指定は変わらない。同じProjectを別の利用側が静的・共有・インターフェースとして同時に使える。種類ごとに生成・ビルドツリーを分け、切り替え前の成果物は自動削除しない。ソースの自動変換も行わないため、静的・共有を使う場合はその形式でビルドできる実装が必要になる。
+依存の形式は、link_project/link_solutionの第2引数で保存される。2026-10-01更新：提供側のビルド設定で `project_type` に静的または共有を明示すると、そのビルドの静的・共有リンクはすべてその形式になる。外部Projectは最上位の `SolutionBuildSettings.project_types` で指定する。保存済みの指定と管理ファイルは変わらない。インターフェースとして保存されたリンクは切り替わらない。明示しなければ、同じProjectを別の利用側が静的・共有・インターフェースとして同時に使える。種類ごとに生成・ビルドツリーを分け、切り替え前の成果物は自動削除しない。ソースの自動変換も行わないため、静的・共有を使う場合はその形式でビルドできる実装が必要になる。
 
 旧APIのHEADER_ONLYはINTERFACE_LIBRARYへ書き換える。旧schema_version=1/2/3のheader_only設定・内部／外部依存・ImportedLibraryはopen/reloadでschema_version=4へ移行し、GUIDと依存IDを保持する。旧設定に形式が一つならそれを作成時形式とし、複数のライブラリ形式がある場合は静的→共有→インターフェースの順で最初に存在する形式を採用する。ライブラリと実行ファイル等が混在する旧設定は、データを破棄せずエラーにする。移行前に旧版でProjectを分けるなどして整理すること。
 
@@ -247,3 +247,27 @@ report = Environment.check(EnvironmentOptions(cmake=CMakeSettings(generator="Nin
 - WindowsのNinja＋MSVCでは、パスに非ASCII文字（日本語等）があると、ヘッダー依存を追跡できない。MSVCの `/showIncludes` が出力するパスはコンソールのコードページで、Ninja 1.13はUTF-8として比較するため。この場合、ビルドは正しく完了するが、毎回再コンパイル・再リンクされる（差分ビルドにならない）。ASCIIパスでは差分ビルドになることを確認済み。VSの生成器にはこの制約はない。
 - ツールチェーンファイルの内容の変更や、コンパイラ無指定時の環境変数以外の変化は検出しない。この場合は `.cppbuild/build` の該当ツリーを利用者が削除する。
 - ファイル・Projectの移動とテンプレート展開は、Linux/macOSでも既存の宛先を上書きしない。ディレクトリは宛先を排他作成してからrename、ファイルはハードリンクしてから元を削除する（ハードリンク非対応なら排他作成してコピー）。
+
+# 依存探索ディレクトリとリンク形式の切り替え（2026-10-01追加）
+
+```python
+from cppbuild import MissingDependenciesError, ProjectType, SolutionBuildSettings
+
+data = ecs.settings.get()
+data.dependency_directories = ["deps"]      # ECS/deps/A, ECS/deps/B, ECS/deps/STL ...
+ecs.settings.save(data)
+
+try:
+    ecs.build()
+except MissingDependenciesError as error:
+    for missing in error.missing:           # clone すべき GUID の一覧
+        print(missing.project_guid, missing.required_by, missing.registered_locations)
+
+# この操作だけ STL を共有ライブラリとしてリンク（project.json は変更しない）
+ecs.set_build_settings(SolutionBuildSettings(project_types={stl_guid: ProjectType.SHARED_LIBRARY}))
+```
+
+- 菱形の依存（ECS→A→STL、ECS→B→STL）では、A・Bが自分の `deps/STL` を登録していても、最上位の `ECS/deps/STL` が使われる。ECSにSTLへの依存を追加する必要はない。clone内に `deps/` がなくてもよい。
+- 最上位Solutionが自分で `link_solution` した所在は、探索ディレクトリより優先する（作業版を指す場合など）。
+- 探索対象は、探索ディレクトリ直下の各ディレクトリにある `.cppbuild/project.json`（Solution）だけ。再帰的には探さない。同じGUIDが2か所にあるとエラーになる。
+- 依存先Projectの `ProjectBuildSettings(project_type=...)` でも、静的⇔共有を切り替えられる。外部Solution内のProjectは、最上位の `project_types`（GUID指定）で切り替える。

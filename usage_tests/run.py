@@ -127,7 +127,7 @@ def libraries(s):
     headers.settings.save(data)
     dual = solution.add_project('Math', 'Math', T.STATIC_LIBRARY, ProjectSettingsData('Math', {
         T.STATIC_LIBRARY: TypeSettingsData(), T.SHARED_LIBRARY: TypeSettingsData()}))
-    dual.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
+    # No explicit selection: StaticApp and SharedApp keep their saved link types.
     add(dual, 'src/math.cpp', '#include <number.hpp>\n__declspec(dllexport) int answer() { return number() + HEADER_BONUS; }\n')
     dual.settings.link_project(headers, T.INTERFACE_LIBRARY)
     consumers = []

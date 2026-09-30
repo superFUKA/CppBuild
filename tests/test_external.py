@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -81,8 +82,8 @@ class ExternalTests(unittest.TestCase):
     def test_static_and_shared_same_project_simultaneous_consumers(self):
         solution = Solution.create(self.root / "Solution", "Demo")
         data = ProjectSettingsData("Lib", {T.STATIC_LIBRARY: TypeSettingsData(), T.SHARED_LIBRARY: TypeSettingsData()})
+        # No explicit selection: each consumer uses its saved link type.
         lib = solution.add_project("Lib", "Lib", T.STATIC_LIBRARY, data)
-        lib.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
         lib.add_file("src/lib.cpp", content="__declspec(dllexport) int value() { return 42; }", auto_update=False)
         apps = []
         for name, kind in (("StaticApp", T.STATIC_LIBRARY), ("SharedApp", T.SHARED_LIBRARY)):
@@ -94,3 +95,8 @@ class ExternalTests(unittest.TestCase):
         self.success(solution.run())
         self.assertTrue(list((lib.root / ".cppbuild/build/vs2022-x64-static_library").rglob("Lib.lib")))
         self.assertTrue(list((lib.root / ".cppbuild/build/vs2022-x64-shared_library").rglob("Lib.dll")))
+        # An explicit static/shared selection on the provider unifies every such link in the build.
+        shutil.rmtree(lib.root / ".cppbuild/build/vs2022-x64-shared_library")
+        lib.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
+        self.success(solution.run())
+        self.assertFalse((lib.root / ".cppbuild/build/vs2022-x64-shared_library").exists())

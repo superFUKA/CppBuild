@@ -109,14 +109,21 @@ class ProjectTypeTests(unittest.TestCase):
             self.project.settings.reload()
         self.assertEqual(self.project.settings.get(), before)
 
-    def test_link_kind_is_fixed_when_provider_selection_changes(self):
+    def test_provider_selection_switches_static_and_shared_links_only(self):
         app = self.solution.add_project("App", "App", T.EXECUTABLE)
         link = app.settings.link_project(self.project, T.STATIC_LIBRARY)
-        for kind in LIBRARIES:
+        # Static/shared follow the provider's explicit selection; an interface selection keeps the saved type.
+        for kind, expected in ((T.STATIC_LIBRARY, T.STATIC_LIBRARY), (T.SHARED_LIBRARY, T.SHARED_LIBRARY),
+                               (T.INTERFACE_LIBRARY, T.STATIC_LIBRARY)):
             self.project.set_build_settings(ProjectBuildSettings(project_type=kind))
             _, nodes = resolve([app])
-            self.assertEqual(nodes[0].settings.project_type, T.STATIC_LIBRARY)
+            self.assertEqual(nodes[0].settings.project_type, expected)
             self.assertEqual(app.settings.get().dependencies[link.dependency_id].project_type, T.STATIC_LIBRARY)
+        interface = self.solution.add_project("Api", "Api", T.INTERFACE_LIBRARY)
+        app.settings.link_project(interface, T.INTERFACE_LIBRARY)
+        interface.set_build_settings(ProjectBuildSettings(project_type=T.SHARED_LIBRARY))
+        _, nodes = resolve([app])
+        self.assertEqual({n.project.name: n.settings.project_type for n in nodes}["Api"], T.INTERFACE_LIBRARY)
 
     def test_legacy_header_settings_and_dependencies_migrate_once(self):
         provider = Solution.create(self.root / "Provider", "Provider")

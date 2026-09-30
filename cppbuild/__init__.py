@@ -13,6 +13,7 @@ from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
     TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
+    MissingDependency, MissingDependenciesError,
 )
 
 __all__ = [
@@ -25,5 +26,5 @@ __all__ = [
     "RunReport", "TestReport", "TestCaseResult",
     "TemplateTools", "Event", "EventCallbackError", "Environment", "EnvironmentOptions",
     "EnvironmentReport", "EnvironmentItem", "ToolSettings", "ProjectInfo", "SolutionInfo",
-    "CMakeSettings", "GeneratorInfo", "CompilerInfo",
+    "CMakeSettings", "GeneratorInfo", "CompilerInfo", "MissingDependency", "MissingDependenciesError",
 ]

@@ -75,14 +75,15 @@ def expand(project, name, replacements):
     return TOKEN.sub(lambda m: replacements[m.group(1)], text).encode("utf-8")
 
 
-def _copy_tree(source, destination, *, exclude=True):
+def _copy_tree(source, destination, *, exclude=True, skip=()):
     if source.is_symlink() or (hasattr(source, "is_junction") and source.is_junction()):
         raise SettingsError("Template roots cannot be filesystem links")
     def inaccessible(error):
         raise error
     for current, directories, files in os.walk(source, followlinks=False, onerror=inaccessible):
         relative = Path(current).relative_to(source)
-        directories[:] = [d for d in directories if not exclude or d not in EXCLUDED]
+        directories[:] = [d for d in directories if (not exclude or d not in EXCLUDED)
+                          and (Path(current) / d).resolve() not in skip]
         for name in [*directories, *files]:
             path = Path(current) / name
             if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
@@ -135,12 +136,18 @@ def _snapshot(solution, destination, name, *, template):
     # This private temporary directory is the only recursive cleanup target.
     with tempfile.TemporaryDirectory(prefix=".cppbuild-template-", dir=destination.parent) as temporary:
         stage = Path(temporary) / "snapshot"
-        _copy_tree(source.root, stage)
+        # Dependency directories hold external clones, restored by their owner, not template content.
+        _copy_tree(source.root, stage, skip={storage.contained(source.root, d) for d in values.dependency_directories})
         clone = Solution.create(stage, name)
         cloned = clone.settings.get()
         cloned.references = deepcopy(values.references)
+        dependency_roots = [storage.contained(source.root, d) for d in values.dependency_directories]
         for reference in cloned.references.values():
-            reference.solution_directory = str((source.root / reference.solution_directory).resolve())
+            location = (source.root / reference.solution_directory).resolve()
+            if any(location.is_relative_to(root) for root in dependency_roots):
+                # Clones in the source's dependency directories are expected in the new Solution's own.
+                location = destination / location.relative_to(source.root)
+            reference.solution_directory = str(location)
         clone.settings._publish(cloned)
         identities = {}
         for project, data in project_data:
@@ -158,6 +165,8 @@ def _snapshot(solution, destination, name, *, template):
         cloned = clone.settings.get()
         cloned.main_project = values.main_project
         cloned.solution_folders = values.solution_folders
+        # The layout setting is copied; cloned dependencies under it are not (they are external Solutions).
+        cloned.dependency_directories = list(values.dependency_directories)
         cloned.file_templates = {key: material_path(source, value).relative_to(source.root).as_posix()
                                  for key, value in values.file_templates.items()}
         clone.settings.save(cloned)

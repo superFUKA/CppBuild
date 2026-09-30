@@ -65,6 +65,7 @@ def transform(kind, payload, convert):
     if kind == "solution":
         _mapping(data, "projects", convert)
         _mapping(data, "file_templates", convert)
+        _list(data, "dependency_directories", convert)
         references = data.get("references", {})
         if not isinstance(references, dict):
             raise SettingsError("references must be a mapping")

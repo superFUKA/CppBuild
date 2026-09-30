@@ -46,11 +46,44 @@ def resolve(projects, *, include_external_members=False):
 
     # The Solution that starts the operation chooses the location of a shared GUID,
     # so nested dependencies may register their own copies of the same Project.
-    preferred = {}
+    preferred, project_types = {}, {}
     for project in projects:
         project._check_active()
         for project_guid in registry(project.solution):
             preferred.setdefault(project_guid, project.solution)
+        for project_guid, kind in project.solution._build_settings.project_types.items():
+            project_types.setdefault(project_guid, kind)
+    found = _dependency_directories({project.solution for project in projects})
+    missing = {}
+
+    def open_external(config):
+        from .core import Solution
+        if config not in external:
+            external[config] = found[1].get(config) or Solution.open(config)
+            if config in overrides:
+                external[config].set_build_settings(overrides[config])
+        return external[config]
+
+    def locate(project, reference):
+        """The Solution holding the dependency GUID, or None when it is not available."""
+        project_guid = reference.project_guid
+        solution = preferred.get(project_guid)
+        if solution is not None:
+            config = (solution.root / registries[solution][project_guid].solution_directory).resolve()
+        elif project_guid in found[0]:
+            # Top-level dependency directories win over locations registered by nested Solutions.
+            config = found[0][project_guid]
+        elif project_guid in registries[project.solution]:
+            config = (project.solution.root / registries[project.solution][project_guid].solution_directory).resolve()
+        else:
+            return project.solution
+        if not (config / "project.json").is_file():
+            entry = missing.setdefault(project_guid, [reference.project_type, [], []])
+            entry[1].append(f"{project.solution.root}:{project.name}")
+            if config not in entry[2]:
+                entry[2].append(config)
+            return None
+        return open_external(config)
 
     def visit(project, requested=None):
         project._check_active()
@@ -58,7 +91,7 @@ def resolve(projects, *, include_external_members=False):
             project.settings.reload()
             loaded.add(project)
         registry(project.solution)
-        settings = project._resolved_build_settings(requested)
+        settings = project._resolved_build_settings(requested, project_types)
         project_guid = project.settings._data.guid
         previous = locations.setdefault(project_guid, project.root)
         if previous != project.root:
@@ -73,18 +106,11 @@ def resolve(projects, *, include_external_members=False):
         for reference in project.settings._data.dependencies.values():
             if not isinstance(reference, Dependency):
                 continue
+            solution = locate(project, reference)
+            if solution is None:
+                continue
             try:
-                solution = preferred.get(reference.project_guid, project.solution)
                 from .references import target
-                if reference.project_guid in registries[solution]:
-                    from .core import Solution
-                    entry = registries[solution][reference.project_guid]
-                    config = (solution.root / entry.solution_directory).resolve()
-                    if config not in external:
-                        external[config] = Solution.open(config)
-                        if config in overrides:
-                            external[config].set_build_settings(overrides[config])
-                    solution = external[config]
                 other = target(solution, reference.project_guid)
             except KeyError as exc:
                 raise SettingsError(f"Missing dependency Project GUID: {reference.project_guid}") from exc
@@ -101,6 +127,11 @@ def resolve(projects, *, include_external_members=False):
         return node
 
     roots = [visit(project) for project in projects]
+    if missing:
+        # Report every unavailable GUID at once, e.g. for a tool deciding what to clone.
+        from .models import MissingDependenciesError, MissingDependency
+        raise MissingDependenciesError(MissingDependency(guid, kind, tuple(sorted(users)), tuple(sorted(locations)))
+                                       for guid, (kind, users, locations) in missing.items())
     if include_external_members:
         expanded = set()
         while any(config not in expanded for config in external):
@@ -114,3 +145,32 @@ def resolve(projects, *, include_external_members=False):
                     selected = project._build_settings.project_type
                     visit(project, selected or project.settings._data.initial_type)
     return roots, ordered
+
+
+def _dependency_directories(solutions):
+    """GUID -> Solution config found directly under the top-level dependency directories."""
+    from .core import Solution
+    from . import storage
+    guids, opened = {}, {}
+    for solution in sorted(solutions, key=lambda s: str(s.root)):
+        local = {p.settings._data.guid for p in solution.projects()}
+        for directory in solution.settings._data.dependency_directories:
+            root = storage.contained(solution.root, directory)
+            if not root.is_dir():
+                continue
+            for child in sorted(root.iterdir()):
+                config = (child / ".cppbuild").resolve()
+                manifest = config / "project.json"
+                if not manifest.is_file() or storage.read_json(manifest).get("kind") != "solution":
+                    continue
+                if config not in opened:
+                    opened[config] = Solution.open(config)
+                for member in opened[config].projects():
+                    project_guid = member.settings._data.guid
+                    if project_guid in local:
+                        raise SettingsError(f"Dependency directory contains a member Project GUID: {project_guid}")
+                    previous = guids.setdefault(project_guid, config)
+                    if previous != config:
+                        raise SettingsError(f"The same Project GUID exists in dependency directories: {project_guid} "
+                                            f"({previous.parent}, {config.parent})")
+    return guids, opened

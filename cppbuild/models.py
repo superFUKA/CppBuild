@@ -97,6 +97,8 @@ class SolutionSettingsData:
     file_templates: dict[str, str] = field(default_factory=dict)
     solution_folders: SolutionFolderSettings | None = None
     references: dict[str, ProjectReference] = field(default_factory=dict)
+    # Directories whose direct child Solutions resolve dependency GUIDs first (e.g. "deps").
+    dependency_directories: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -151,6 +153,8 @@ class SolutionBuildSettings:
     test_continue_on_failure: bool = True
     tools: ToolSettings = field(default_factory=ToolSettings)
     cmake: CMakeSettings = field(default_factory=CMakeSettings)
+    # Project GUID -> STATIC_LIBRARY/SHARED_LIBRARY, overriding saved link types in this operation.
+    project_types: dict[str, ProjectType] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -165,3 +169,23 @@ class SettingsError(ValueError):
 
 class SettingsConflictError(SettingsError):
     """Saved settings changed since this object last read them."""
+
+
+@dataclass(frozen=True)
+class MissingDependency:
+    project_guid: str
+    project_type: ProjectType
+    required_by: tuple[str, ...]
+    registered_locations: tuple = ()
+
+
+class MissingDependenciesError(SettingsError):
+    """Dependencies found neither in the dependency directories nor at their registered locations."""
+
+    def __init__(self, missing):
+        self.missing = tuple(missing)
+        super().__init__("Missing dependency Project GUIDs: " + ", ".join(m.project_guid for m in self.missing))
+
+    @property
+    def project_guids(self):
+        return tuple(m.project_guid for m in self.missing)

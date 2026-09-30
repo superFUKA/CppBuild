@@ -300,3 +300,25 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 - cleanは全生成器で、所有ツリーに対して `cmake --build --config <構成> --target clean` を実行する。ツリー内部のGoogleTest・CMakeSourceも削除対象になる。事前の構成禁止と共有依存の保護は維持する。
 - 依存先の成果物は、生成するCMakeListsが出力する `cppbuild-outputs-<構成>.txt`（TARGET_FILE／TARGET_LINKER_FILE）で特定する。拡張子で判定しない。
 - 詳細・制約は [利用手順](USAGE.md) の「生成器・コンパイラの切り替え」、検証状況は [実装記録](IMPLEMENTATION_STATUS.md) を参照。
+
+## 2026-10-01追加：依存探索ディレクトリとリンク形式の切り替え
+
+ECOBuildからの依頼（リンク関連）を、ユーザー指示で次の2点に絞って実装した。手動の参照登録API（pin）案は、依存探索ディレクトリ方式へ差し替えた。「事前登録・手動削除のAPIは追加しない」という方針は維持する。
+
+- `SolutionSettingsData.dependency_directories: list[str]`（管理データ、Solution内の相対パス、`settings.save` で変更）。
+  - 空なら管理ファイルに書き出さないため、既存ファイルに差分は出ない。schema_versionは4のまま。
+  - 旧版のCppBuildは、この項目を含むファイルを「想定外のフィールド」として拒否する。
+  - 指定できるのは、Solution直下以外のサブディレクトリで、`.cppbuild` 配下・メンバーProjectと重ならないもの。存在しないディレクトリは空として扱う。
+- 依存解決でのGUIDの所在の優先順：
+  1. 操作を始めた最上位Solutionの参照一覧
+  2. 最上位Solutionの依存探索ディレクトリ直下で見つかったSolution
+  3. 依存元Solution自身の参照一覧
+  - 2で見つかったGUIDについては、入れ子側が登録した所在が実在しなくてもよい。
+  - 探索ディレクトリ内に同じGUIDが複数ある場合、またはメンバーProjectと同じGUIDがある場合はSettingsError。
+- 所在が見つからない依存は、解決を最後まで進めてから `MissingDependenciesError`（SettingsErrorのサブクラス）でまとめて報告する。
+  - `.missing` は `MissingDependency(project_guid, project_type, required_by, registered_locations)` のタプル、`.project_guids` はGUIDのタプル。
+- `SolutionBuildSettings.project_types: dict[GUID, ProjectType]`（非保存）。値は `STATIC_LIBRARY`／`SHARED_LIBRARY` のみ。
+  - 形式の優先順：操作を始めた最上位の `project_types` → 依存先Projectの `ProjectBuildSettings.project_type`（明示時）→ 利用側に保存された要求形式。
+  - 切り替えるのは静的⇔共有のリンクだけ。インターフェースとして要求されたリンクと、インターフェースの明示選択では、保存済みの形式を使う。
+  - `project_types` はリンクされていない静的・共有のProject自体にも適用する。対象Projectにない形式を指定した場合はSettingsError。保存済みの依存と管理ファイルは変更しない。
+- Solutionテンプレート：依存探索ディレクトリの設定はコピーし、中身（clone）はコピーしない。探索ディレクトリ内への参照は、新しいSolutionの同じ相対位置を指すように書き換える。
