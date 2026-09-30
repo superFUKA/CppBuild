@@ -8,8 +8,12 @@ class ProjectType(str, Enum):
     STATIC_LIBRARY = "static_library"
     SHARED_LIBRARY = "shared_library"
     EXECUTABLE = "executable"
-    HEADER_ONLY = "header_only"
+    INTERFACE_LIBRARY = "interface_library"
     TEST = "test"
+
+
+LIBRARY_TYPES = frozenset({ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY,
+                           ProjectType.INTERFACE_LIBRARY})
 
 
 class Inheritance(Enum):
@@ -75,6 +79,7 @@ class ProjectSettingsData:
     project_headers: list[str] = field(default_factory=list)
     system_headers: list[str] = field(default_factory=list)
     guid: str = field(default_factory=lambda: str(uuid.uuid4()))
+    initial_type: ProjectType | None = None
 
 
 @dataclass

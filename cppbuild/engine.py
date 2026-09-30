@@ -141,7 +141,7 @@ def _cmake(project, settings, files, dependencies=()):
                   f'FetchContent_Declare(googletest URL {archive} URL_HASH SHA256=1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4 DOWNLOAD_EXTRACT_TIMESTAMP TRUE TIMEOUT 60 INACTIVITY_TIMEOUT 15)',
                   'FetchContent_MakeAvailable(googletest)', 'enable_testing()']
     listed = "\n  ".join(_path(p) for p in files)
-    if kind == ProjectType.HEADER_ONLY:
+    if kind == ProjectType.INTERFACE_LIBRARY:
         lines += [f"add_library({name} INTERFACE)", f"add_custom_target({name}_files SOURCES\n  {listed}\n)"]
     else:
         if not any(p.suffix.lower() in {".cpp", ".cxx", ".cc"} for p in files):
@@ -155,7 +155,7 @@ def _cmake(project, settings, files, dependencies=()):
         definitions = project.settings._data.types[kind].compile_definitions
         if definitions:
             lines += [f"target_compile_definitions({name} PRIVATE " + " ".join(_quote(d) for d in definitions) + ")"]
-    scope = "INTERFACE" if kind == ProjectType.HEADER_ONLY else "PUBLIC"
+    scope = "INTERFACE" if kind == ProjectType.INTERFACE_LIBRARY else "PUBLIC"
     data = project.settings._data.types[kind]
     for directory in data.include_directories:
         lines += [f"target_include_directories({name} {scope} {_path(storage.contained(project.root, directory))})"]
@@ -169,7 +169,7 @@ def _cmake(project, settings, files, dependencies=()):
         imported.add(alias)
         child_kind = node.settings.project_type
         child_data = node.project.settings._data.types[child_kind]
-        if child_kind == ProjectType.HEADER_ONLY:
+        if child_kind == ProjectType.INTERFACE_LIBRARY:
             lines.append(f"add_library({alias} INTERFACE IMPORTED)")
         else:
             imported_kind = "STATIC" if child_kind == ProjectType.STATIC_LIBRARY else "SHARED"
@@ -206,7 +206,7 @@ def _cmake(project, settings, files, dependencies=()):
     from .dependencies import cmake as external_cmake
     for key, value in project.settings._data.dependencies.items():
         lines.extend(external_cmake(project, settings, key, value, name, scope))
-    if kind != ProjectType.HEADER_ONLY:
+    if kind != ProjectType.INTERFACE_LIBRARY:
         headers = [_path(storage.contained(project.root, h)) for h in project.settings._data.project_headers]
         headers += [_quote("<" + h + ">") for h in project.settings._data.system_headers]
         if headers:
@@ -227,7 +227,7 @@ def _cmake(project, settings, files, dependencies=()):
 
 
 def _target(project, settings):
-    return project.name + ("_files" if settings.project_type == ProjectType.HEADER_ONLY else "")
+    return project.name + ("_files" if settings.project_type == ProjectType.INTERFACE_LIBRARY else "")
 
 
 def _prepare(project):
@@ -289,7 +289,7 @@ def lock_nodes(nodes):
 
 
 def _artifacts(project, settings, build):
-    if settings.project_type == ProjectType.HEADER_ONLY:
+    if settings.project_type == ProjectType.INTERFACE_LIBRARY:
         return ()
     reply = build / ".cmake/api/v1/reply"
     indexes = sorted(reply.glob("index-*.json"))

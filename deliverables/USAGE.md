@@ -114,7 +114,7 @@ report = solution.update()
 
 リンク先は `LinkedProjects/<相手のSolution名>` に全所属Projectを表示する。間接リンク先も同じ階層へ集約し、同じSolutionは重複表示しない。同名の別Solutionはパス由来の短い識別子を表示名へ付ける。表示用に追加した未参照Projectは通常のビルド対象に加えないが、表示する `.vcxproj` の生成には、そのProjectの有効な設定・ソース・外部依存が必要になる。TESTの構成ではGoogleTestの取得が必要になり得る。
 
-未参照Projectが複数種類を持つ場合、種類の明示指定がなければ各種類を表示する。実際の依存で参照済みのProjectは要求された種類を表示する。全体操作の構成・architecture・ToolSettingsの整合条件は表示用Projectにも適用する。外部Solutionの設定は `external_build_settings` で指定できる。
+未参照Projectは明示選択、または作成時形式で表示する。選択可能なライブラリ3形式をすべて表示するための生成は行わない。実際の依存で参照済みのProjectは要求された種類を表示する。全体操作の構成・architecture・ToolSettingsの整合条件は表示用Projectにも適用する。外部Solutionの設定は `external_build_settings` で指定できる。
 
 保存・再open・テンプレート復元で表示設定を保持する。Project登録解除時は対応する配置設定も削除する。`settings.solution_folders = None` を保存して全体updateすると、従来の依存Projectのみの階層なし表示へ戻る。個別Projectのupdateでは全体表示を変更しない。
 
@@ -140,7 +140,7 @@ GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡�
 
 Projectの登録解除でも未使用になった参照を自動削除する。依存の変更を生成物へ反映する際は、従来どおりupdate/buildを呼ぶ。リンク先のファイルや成果物は削除しない。
 
-旧管理ファイルはopen/reload時にschema_version=3へ自動保存して移行する。旧別名を同じ対象GUIDへ統合し、解除用IDはすべて維持する。初回は書き込み権限が必要で、対象GUIDが未保存の旧外部リンクはリンク先も必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
+旧管理ファイルはopen/reload時にschema_version=4へ自動保存して移行する。旧別名を同じ対象GUIDへ統合し、解除用IDはすべて維持する。初回は書き込み権限が必要で、対象GUIDが未保存の旧外部リンクはリンク先も必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
 
 # 別の環境への移設と相対パス（2026-09-30追加）
 
@@ -156,7 +156,7 @@ Workspace/
 
 Workspace全体を別の場所へ移してから `Solution.open(new_workspace / "Consumer/.cppbuild")` すれば、移設先のProviderを参照する。ソース、include、PCH、共有素材、CMakeソース／パッケージ、ImportedLibraryのDLL・LIB・includeも同じ方式で保存する。利用側と依存先の相対配置を維持すること。
 
-- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=3へ自動移行してから移す。初回は設定の書き込み権限が必要。
+- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=4へ自動移行してから移す。初回は設定の書き込み権限が必要。
 - `.cppbuild/build`・`.cppbuild/generated` の既存CMakeキャッシュや生成物は移設先へ持ち込まず、移設先でupdate/buildして再生成する。テンプレート機能はこれらを除外する。
 - ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
 - 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。
@@ -179,3 +179,27 @@ cleanは既存のビルドツリーでMSBuild Cleanを実行する。事前のCM
 - ソース・保存設定・CMakeキャッシュ・生成したVSプロジェクトは保持する。現在の構成以外の成果物、依存先と対象外Projectの成果物も保持する。キャッシュを丸ごと削除する機能は今回追加していない。
 
 rebuildは従来どおり、ビルドに必要な生成を行ってから対象をCleanし、ビルドする。
+
+# Projectの形式切り替え（2026-09-30更新）
+
+ライブラリProjectは`STATIC_LIBRARY`・`SHARED_LIBRARY`・`INTERFACE_LIBRARY`の3形式を最初から選択できる。`EXECUTABLE`と`TEST`はそれぞれ固定で、他形式への変更や混在を拒否する。
+
+```python
+from cppbuild import ProjectBuildSettings, ProjectType
+
+library = solution.add_project("Library", "Library", ProjectType.STATIC_LIBRARY)
+library.set_build_settings(ProjectBuildSettings(project_type=ProjectType.INTERFACE_LIBRARY))
+report = library.build()
+```
+
+INTERFACE_LIBRARYは自身のライブラリバイナリを生成せず、インクルードパス・公開定義・依存関係を利用側へ渡す。宣言・型・マクロだけのヘッダーも扱える。.cppがあってもそのProjectのソースはコンパイルせず、VSのファイル一覧には表示する。CMakeによるコンパイラー検出の試験コンパイルは通常どおり発生し得る。
+
+選択を省略すると、保存された作成時形式ProjectSettingsData.initial_typeを使う。initial_typeは作成時に設定され、通常saveでは変更できない管理情報。実行時のProjectBuildSettings.project_typeは保存しないため、再open後は作成時形式へ戻る。set_build_settingsはビルド設定全体を置き換えるので、構成・実行引数・ツール指定等を引き続き使う場合は、それらも渡す。
+
+ライブラリのtypesには3形式それぞれのTypeSettingsDataを保持する。作成・旧設定移行時に不足形式を既定設定で補い、既存形式の設定は保持する。別形式のinclude_directoriesや定義を自動コピーしないため、必要に応じて種類別設定を変更する。saveで形式の一部を削除したり、実行ファイルやTESTへ変換したりすることはできない。
+
+依存の形式はlink_project/link_solutionの第2引数で固定される。提供側のproject_typeを変えても利用側の指定は変わらない。同じProjectを別の利用側が静的・共有・インターフェースとして同時に使える。種類ごとに生成・ビルドツリーを分け、切り替え前の成果物は自動削除しない。ソースの自動変換も行わないため、静的・共有を使う場合はその形式でビルドできる実装が必要になる。
+
+旧APIのHEADER_ONLYはINTERFACE_LIBRARYへ書き換える。旧schema_version=1/2/3のheader_only設定・内部／外部依存・ImportedLibraryはopen/reloadでschema_version=4へ移行し、GUIDと依存IDを保持する。旧設定に形式が一つならそれを作成時形式とし、複数のライブラリ形式がある場合は静的→共有→インターフェースの順で最初に存在する形式を採用する。ライブラリと実行ファイル等が混在する旧設定は、データを破棄せずエラーにする。移行前に旧版でProjectを分けるなどして整理すること。
+
+移行には設定の書き込み権限が必要。旧種類設定ファイルと旧vs2022-<architecture>-header_only生成物は自動削除しない。新名称の生成物はupdate/buildで生成する。テンプレート・Project移動でも作成時形式を保持する。

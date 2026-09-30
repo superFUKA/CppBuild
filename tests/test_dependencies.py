@@ -51,10 +51,9 @@ class DependencyTests(unittest.TestCase):
         self.app.settings.link_project(self.math, T.STATIC_LIBRARY)
         data = self.math.settings.get()
         from cppbuild import TypeSettingsData
-        data.types = {T.HEADER_ONLY: TypeSettingsData()}
-        self.math.settings.save(data)
+        data.types = {T.INTERFACE_LIBRARY: TypeSettingsData()}
         with patch("cppbuild.engine.process") as call, self.assertRaises(SettingsError):
-            self.app.build()
+            self.math.settings.save(data)
         call.assert_not_called()
 
     def test_default_and_explicit_empty_selection(self):

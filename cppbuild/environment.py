@@ -130,7 +130,7 @@ def check_owner(owner):
             elif isinstance(dependency, CMakePackage):
                 paths = [node.project.root / dependency.directory]
             elif isinstance(dependency, ImportedLibrary):
-                if dependency.project_type != ProjectType.HEADER_ONLY:
+                if dependency.project_type != ProjectType.INTERFACE_LIBRARY:
                     paths = [node.project.root / dependency.locations.get(settings.configuration, ".cppbuild/missing")]
                     if dependency.project_type == ProjectType.SHARED_LIBRARY:
                         paths.append(node.project.root / dependency.import_libraries.get(settings.configuration, ".cppbuild/missing"))

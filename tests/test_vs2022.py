@@ -77,11 +77,11 @@ class VS2022Tests(unittest.TestCase):
         self.assertEqual(len(build_failure.processes), 2)  # configure/build; no run
 
     def test_static_shared_header_and_external_setting_reload(self):
-        for kind in (T.STATIC_LIBRARY, T.SHARED_LIBRARY, T.HEADER_ONLY):
+        for kind in (T.STATIC_LIBRARY, T.SHARED_LIBRARY, T.INTERFACE_LIBRARY):
             with self.subTest(kind=kind):
                 name = "Lib_" + kind.value
                 project = self.solution.add_project(name, name, kind)
-                if kind == T.HEADER_ONLY:
+                if kind == T.INTERFACE_LIBRARY:
                     project.add_file("include/lib.hpp", content="#pragma once\ninline int value() { return 42; }\n", auto_update=False)
                 else:
                     project.add_file("src/lib.cpp", content="__declspec(dllexport) int value() { return 42; }\n", auto_update=False)

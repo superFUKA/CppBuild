@@ -40,7 +40,7 @@ class RelativePathTests(unittest.TestCase):
 
     def assert_document(self, path, kind):
         raw = storage.read_json(path)
-        self.assertEqual(raw["schema_version"], 3)
+        self.assertEqual(raw["schema_version"], storage.CURRENT_SCHEMA)
         self.assertEqual(raw["kind"], kind)
         self.assertNotIn(str(self.root), path.read_text(encoding="utf-8"))
         return raw["data"]
@@ -149,8 +149,8 @@ class RelativePathTests(unittest.TestCase):
         self.assertEqual(loaded.get_project("App").settings.get(), expected)
         for project in loaded.projects():
             for filename in project.settings._revision:
-                self.assertEqual(storage.read_json(filename)["schema_version"], 3)
-        self.assertEqual(storage.read_json(loaded.settings.path)["schema_version"], 3)
+                self.assertEqual(storage.read_json(filename)["schema_version"], storage.CURRENT_SCHEMA)
+        self.assertEqual(storage.read_json(loaded.settings.path)["schema_version"], storage.CURRENT_SCHEMA)
         with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
             Solution.open(loaded.root / ".cppbuild")
         moved = self.root / "Migrated"
@@ -194,7 +194,7 @@ class RelativePathTests(unittest.TestCase):
                 app = loaded.get_project("App")
                 self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])
                 for filename in app.settings._revision:
-                    self.assertEqual(storage.read_json(filename)["schema_version"], 3)
+                    self.assertEqual(storage.read_json(filename)["schema_version"], storage.CURRENT_SCHEMA)
                 with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
                     app.settings.reload()
                 self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])

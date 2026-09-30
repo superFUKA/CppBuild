@@ -15,9 +15,9 @@ def main():
     destination.mkdir(parents=True, exist_ok=False)
     archive = str(Path(sys.argv[2]).resolve()) if len(sys.argv) > 2 else None
     solution = Solution.create(destination / "Original", "Workflow")
-    library = solution.add_project("Library", "Library", ProjectType.HEADER_ONLY)
+    library = solution.add_project("Library", "Library", ProjectType.INTERFACE_LIBRARY)
     tests = solution.add_project("Tests", "Tests", ProjectType.TEST)
-    tests.settings.link_project(library, ProjectType.HEADER_ONLY)
+    tests.settings.link_project(library, ProjectType.INTERFACE_LIBRARY)
     tests.set_build_settings(ProjectBuildSettings(googletest_archive=archive))
     solution.set_build_settings(SolutionBuildSettings(test_projects=["Tests"]))
     library.add_file("include/material.hpp", content="#pragma once\ninline int Example() { return 42; }\n", auto_update=False)

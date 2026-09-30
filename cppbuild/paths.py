@@ -7,7 +7,7 @@ from .dependencies import LegacyDependency
 from .models import CMakePackage, CMakeSource, ImportedLibrary, SettingsError
 
 
-TYPE_KINDS = {"static_library", "shared_library", "executable", "header_only", "test"}
+TYPE_KINDS = {"static_library", "shared_library", "executable", "interface_library", "header_only", "test"}
 
 
 def relative(base, target):

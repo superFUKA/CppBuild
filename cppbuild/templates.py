@@ -144,7 +144,7 @@ def _snapshot(solution, destination, name, *, template):
         clone.settings._publish(cloned)
         identities = {}
         for project, data in project_data:
-            created = clone.add_project(values.projects[project.name], project.name, next(iter(data.types)), data)
+            created = clone.add_project(values.projects[project.name], project.name, data.initial_type, data)
             identities[data.guid] = created.settings.get().guid
         for project in clone.projects():
             data = project.settings.get()

@@ -77,14 +77,15 @@ class ManagementTests(unittest.TestCase):
                                           T.SHARED_LIBRARY: TypeSettingsData(["BUILD_DLL"])})
         lib = self.solution.add_project("Lib", "Lib", T.STATIC_LIBRARY, data)
         raw = json.loads(lib.settings.path.read_text())
-        self.assertEqual(len(raw["data"]["types"]), 2)
-        with self.assertRaises(SettingsError):
-            lib._resolved_build_settings()
+        self.assertEqual(len(raw["data"]["types"]), 3)
+        self.assertEqual(lib._resolved_build_settings().project_type, T.STATIC_LIBRARY)
         lib.set_build_settings(ProjectBuildSettings(project_type=T.SHARED_LIBRARY))
         self.assertEqual(lib._resolved_build_settings().project_type, T.SHARED_LIBRARY)
         loaded = Solution.open(self.root / ".cppbuild").get_project("Lib")
         self.assertNotEqual(lib.settings.get().guid, data.guid)
         data.guid = lib.settings.get().guid
+        data.initial_type = T.STATIC_LIBRARY
+        data.types[T.INTERFACE_LIBRARY] = TypeSettingsData()
         self.assertEqual(loaded.settings.get(), data)
 
     def test_failed_manifest_publish_preserves_disk_and_memory(self):

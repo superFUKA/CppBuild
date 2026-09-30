@@ -106,7 +106,5 @@ def resolve(projects, *, include_external_members=False):
                     if any(node.project.root == project.root for node in ordered):
                         continue
                     selected = project._build_settings.project_type
-                    kinds = [selected] if selected is not None else project.settings.get().types
-                    for kind in kinds:
-                        visit(project, kind)
+                    visit(project, selected or project.settings._data.initial_type)
     return roots, ordered

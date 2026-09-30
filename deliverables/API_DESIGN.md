@@ -128,7 +128,9 @@ reload時のProject参照維持・解除済み参照の無効化・外部編集�
 
 set_project_settingsやset_source_directoriesは追加せず、個別settingsのデータ変更を使う。C++規格・出力先・VSプロパティ相当の設定はデータ項目として設計し、項目ごとの専用API確認はしない。
 
-ProjectTypeはSTATIC_LIBRARY・SHARED_LIBRARY・EXECUTABLE・HEADER_ONLY・TEST。複数種類への対応と、種類ごとに管理設定ファイルを持つことは確認済み。supported_types、ファイル名・項目・許容組合せは詳細案。登録だけで任意のソースが静的／共有の両方へ対応するとはしない。
+ProjectTypeはSTATIC_LIBRARY・SHARED_LIBRARY・EXECUTABLE・INTERFACE_LIBRARY・TEST。ライブラリは静的・共有・インターフェースの3形式を常に持ち、ProjectBuildSettings.project_typeで相互に切り替える。EXECUTABLEとTESTは各形式固定で、他形式との混在・変換を拒否する。旧名称HEADER_ONLYは廃止した。INTERFACE_LIBRARYは.cppが存在してもコンパイルせず、インクルードパス・公開定義・依存関係を利用側へ渡し、自身のライブラリバイナリを生成しない。
+
+ProjectSettingsData.initial_typeは作成時形式を保存する管理情報で変更不可。add_projectのproject_typeで設定し、ProjectBuildSettings.project_type省略時に使用する。非保存のビルド時選択は再open後に復元しない。作成・旧設定移行では不足するライブラリ形式へ既定のTypeSettingsDataを補う。種類別設定は相互コピーしない。saveでライブラリ3形式の一部を削除することはできない。依存はリンク時に指定した種類を要求し、提供側の単独ビルド時選択には追随しない。ソースを自動変換せず、各形式への対応は利用側の責任とする。
 
 確認済み：Solution／Projectへビルド設定をメソッドで渡す。具体名はsolution.set_build_settings(values)、project.set_build_settings(values)を案とする。保持した設定を操作時に使い、管理設定のsave/reloadでは保存・復元しない。コピー保持・全置換・未設定時の扱いは詳細案。
 
@@ -279,8 +281,8 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 - 内部・外部とも `Dependency(project_guid, project_type)` を保存する。対象名・参照名・外部パスをProject側の依存に保存しない。外部対象の所在はSolutionの参照一覧から取得し、型付きパスは設定ファイル基準の相対パスで保存する。
 - `unlink(dependency_id)` は利用元Projectの依存を解除し、最後の利用がなくなった対象GUIDの登録を自動削除する。Project登録解除やProject設定saveによる依存削除も同じ規則。対象ファイルは削除しない。事前登録・手動削除のAPIは追加しない。
 - 同一Solution内の `link_project` は引数を維持し、内部の対象識別にGUIDを保存。外部リンクは登録時の主ProjectをGUIDで固定し、以後の主Project変更で対象を切り替えない。`LinkReport` と解除用IDは維持する。
-- 旧ファイルはopen/reload時にschema_version=3へ移行する。名前付き参照は保存済みGUIDへ統合し、解除用IDは保持する。初回は書き込み権限が必要。対象GUIDが未保存の旧外部リンクにはリンク先へのアクセスも必要。移行済みファイルの再読み込みは保存しない。詳細は [設定詳細](SETTINGS_DESIGN.md) を参照。
+- 旧ファイルはopen/reload時にschema_version=4へ移行する。名前付き参照は保存済みGUIDへ統合し、解除用IDは保持する。初回は書き込み権限が必要。対象GUIDが未保存の旧外部リンクにはリンク先へのアクセスも必要。移行済みファイルの再読み込みは保存しない。詳細は [設定詳細](SETTINGS_DESIGN.md) を参照。
 
 ## 2026-09-30追加：設定ファイル基準の相対パス
 
-現行の管理JSONはschema_version=3。バージョン2の相対パス形式を維持し、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。
+現行の管理JSONはschema_version=4。バージョン2の相対パス形式を維持し、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。

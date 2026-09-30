@@ -11,7 +11,7 @@ import uuid
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference,
+    TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference, LIBRARY_TYPES,
 )
 from . import storage
 from . import dependencies as dependency_data
@@ -98,6 +98,20 @@ class ProjectSettings(_Settings):
         self.path = owner.root / ".cppbuild" / "project.json"
         self._revision = {}
 
+    @staticmethod
+    def _complete_types(values, initial_type=None):
+        """Initialize new/legacy settings; ordinary saves keep the complete family."""
+        if not isinstance(values.types, dict) or not values.types:
+            raise SettingsError("At least one project type is required")
+        if initial_type is not None:
+            values.initial_type = initial_type
+        if values.initial_type is None:
+            values.initial_type = next((kind for kind in ProjectType if kind in values.types), None)
+        if values.initial_type in LIBRARY_TYPES:
+            for kind in ProjectType:
+                if kind in LIBRARY_TYPES:
+                    values.types.setdefault(kind, TypeSettingsData())
+
     def _validate(self, values, *, legacy=False):
         if not isinstance(values, ProjectSettingsData):
             raise SettingsError("Expected ProjectSettingsData")
@@ -116,6 +130,13 @@ class ProjectSettings(_Settings):
             _strings(data.include_directories)
             for directory in data.include_directories:
                 storage.contained(self.owner.root, directory)
+        if not isinstance(values.initial_type, ProjectType):
+            raise SettingsError("Expected an initial ProjectType")
+        family = LIBRARY_TYPES if values.initial_type in LIBRARY_TYPES else {values.initial_type}
+        if set(values.types) != family:
+            raise SettingsError("A Project must contain all three library types, or only EXECUTABLE, or only TEST")
+        if hasattr(self, "_data") and values.initial_type != self._data.initial_type:
+            raise SettingsError("Initial Project type cannot be changed")
         if not isinstance(values.dependencies, dict):
             raise SettingsError("dependencies must be a mapping")
         for key, dependency in values.dependencies.items():
@@ -141,15 +162,19 @@ class ProjectSettings(_Settings):
         raw.setdefault("project_headers", [])
         raw.setdefault("system_headers", [])
         raw.setdefault("guid", None)
-        storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers", "guid"})
+        if version < 4:
+            raw.setdefault("initial_type", None)
+        storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers", "guid", "initial_type"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
         types, revisions = {}, {self.path: storage.digest(self.path)}
         for key, relative in raw["types"].items():
             try:
-                kind = ProjectType(key)
+                kind = ProjectType.INTERFACE_LIBRARY if key == "header_only" and version < 4 else ProjectType(key)
             except ValueError as exc:
                 raise SettingsError(f"Unsupported project type: {key}") from exc
+            if kind in types:
+                raise SettingsError("Duplicate interface library type")
             path = storage.contained(self.path.parent / "types", relative)
             data = storage.manifest(path, key, root=self.owner.root)
             data.setdefault("public_definitions", [])
@@ -161,9 +186,17 @@ class ProjectSettings(_Settings):
         if not isinstance(raw["dependencies"], dict):
             raise SettingsError("dependencies must be a mapping")
         for key, data in raw["dependencies"].items():
-            dependencies[key] = dependency_data.decode(data, legacy=version < storage.CURRENT_SCHEMA)
-        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"])
-        self._validate(values, legacy=version < storage.CURRENT_SCHEMA)
+            dependencies[key] = dependency_data.decode(data, legacy=version < 3, legacy_types=version < 4)
+        try:
+            default = raw["initial_type"]
+            default = (ProjectType.INTERFACE_LIBRARY if default == "header_only" and version < 4
+                       else ProjectType(default) if default is not None else None)
+        except (TypeError, ValueError) as exc:
+            raise SettingsError("Unsupported initial Project type") from exc
+        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default)
+        if version < 4:
+            self._complete_types(values)
+        self._validate(values, legacy=version < 3)
         return values, revisions
 
     def reload(self):
@@ -202,7 +235,8 @@ class ProjectSettings(_Settings):
             documents[path] = content
         payload = {"name": values.name, "source_directories": values.source_directories, "types": refs,
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
-                   "project_headers": values.project_headers, "system_headers": values.system_headers, "guid": values.guid}
+                   "project_headers": values.project_headers, "system_headers": values.system_headers, "guid": values.guid,
+                   "initial_type": values.initial_type.value}
         documents[self.path] = storage.document(self.path, "project", payload, version=version)
         return documents
 
@@ -337,7 +371,7 @@ class SolutionSettings(_Settings):
             storage.object_fields(folder, {"projects", "linked_projects", "project_folders"})
             raw["solution_folders"] = SolutionFolderSettings(**folder)
         values = SolutionSettingsData(**raw)
-        self._validate(values, legacy=version < storage.CURRENT_SCHEMA)
+        self._validate(values, legacy=version < 3)
         return values
 
     def reload(self):
@@ -425,6 +459,8 @@ class Project:
         if not isinstance(values, ProjectBuildSettings):
             raise SettingsError("Expected ProjectBuildSettings")
         _build_settings(values)
+        if values.project_type is not None and values.project_type not in self.settings._data.types:
+            raise SettingsError("Selected type is not supported by the Project")
         self._build_settings = deepcopy(values)
 
     def _resolved_build_settings(self, requested_type=None):
@@ -436,9 +472,7 @@ class Project:
             if getattr(values, key) is INHERIT:
                 setattr(values, key, deepcopy(getattr(self.solution._build_settings, key)))
         if values.project_type is None:
-            if len(self.settings._data.types) != 1:
-                raise SettingsError("Select project_type explicitly for a multi-type Project")
-            values.project_type = next(iter(self.settings._data.types))
+            values.project_type = self.settings._data.initial_type
         if values.project_type not in self.settings._data.types:
             raise SettingsError("Selected type is not supported by the Project")
         return values
@@ -623,6 +657,9 @@ class Solution:
         self.settings._validate(values)
         project = Project(self, root, name)
         data = deepcopy(settings) if settings is not None else ProjectSettingsData(name, {project_type: TypeSettingsData()})
+        if not isinstance(data, ProjectSettingsData):
+            raise SettingsError("Expected ProjectSettingsData")
+        project.settings._complete_types(data, project_type)
         project.settings._validate(data)
         data.guid = str(uuid.uuid4())
         if project_type not in data.types:

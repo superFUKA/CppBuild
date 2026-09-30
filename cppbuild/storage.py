@@ -13,7 +13,7 @@ import tempfile
 from .models import SettingsConflictError, SettingsError
 
 
-CURRENT_SCHEMA = 3
+CURRENT_SCHEMA = 4
 
 
 def encoded(value):
@@ -102,7 +102,7 @@ def object_fields(value, required):
 def manifest(path, kind, *, root=None, with_version=False):
     result = read_json(path)
     object_fields(result, {"schema_version", "kind", "data"})
-    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2, 3} or result["kind"] != kind:
+    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2, 3, 4} or result["kind"] != kind:
         raise SettingsError(f"Unsupported schema or document kind: {path}")
     from .paths import decode
     data = decode(path, kind, result["data"], result["schema_version"], root=root)

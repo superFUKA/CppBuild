@@ -53,7 +53,7 @@ target_sourcesでtargetの一覧を定義し、Projectごとに分けたCMakeデ
 
 代替案は単一の全体ツリーを共用する方式。個別updateでも全体のCMake構成・生成を行えば全体.slnを更新できる。ただし無関係なProjectの構成エラーも個別更新へ影響し、個別の完全な独立性は保てない。単に.vcxprojだけを手編集してCMakeを迂回する案は採用しない。
 
-一つの論理Projectが静的版・共有版を同時に必要とされる場合は、内部CMake targetを種類別に分け、対応する複数.vcxprojを生成する案。公開Projectと.vcxprojを常に1対1とはしない。HEADER_ONLYの表示方法とCMakeの補助プロジェクトも含めて実検証する。
+一つの論理Projectが静的版・共有版を同時に必要とされる場合は、内部CMake targetを種類別に分け、対応する複数.vcxprojを生成する案。公開Projectと.vcxprojを常に1対1とはしない。INTERFACE_LIBRARYの表示方法とCMakeの補助プロジェクトも含めて実検証する。
 
 ## 2. CMake入力とディレクトリ
 
@@ -154,7 +154,7 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 - [source_group](https://cmake.org/cmake/help/latest/command/source_group.html)：ソース配置からのIDE表示グループ。
 - [File API](https://cmake.org/cmake/help/latest/manual/cmake-file-api.7.html)：生成されたビルドシステム情報を取得する仕組み。
 
-実装後の最小検証は、App→Mathと独立Toolによる全体／個別生成、ビルド対象選択、ファイル追加のフィルター反映、Debug／Release切替、設定save/open、失敗時の状態、個別cleanの非干渉。静的／共有同時生成・HEADER_ONLY表示・GoogleTest共有も別途検証する。
+実装後の最小検証は、App→Mathと独立Toolによる全体／個別生成、ビルド対象選択、ファイル追加のフィルター反映、Debug／Release切替、設定save/open、失敗時の状態、個別cleanの非干渉。静的／共有同時生成・INTERFACE_LIBRARY表示・GoogleTest共有も別途検証する。
 
 ## 最新追加事項：実行順とGoogleTest導入
 
@@ -174,3 +174,9 @@ Dependencyのproject_guidは、まず操作を始めた最上位Solutionのrefer
 管理JSONを相対パス化し、利用側と依存先の相対配置を保った移設後も再生成できるようにする。既存CMakeキャッシュ・所有マーカーは環境依存の生成物であり、移設先では再利用しない。管理設定とソースを持ち込み、update/buildで生成する。
 
 移設後の実試験で、外部CMakeソースの子targetが全体.slnの構成表に載らないため、Release時にDebugへ戻る問題を確認。APIが起動する全体MSBuildに `ShouldUnsetParentConfigurationAndPlatform=false` を指定し、子targetにも要求した構成・platformを引き継ぐ。全体操作の構成一致条件は維持する。
+
+## 2026-09-30更新：ライブラリ3形式の切り替え
+
+INTERFACE_LIBRARYはCMakeのINTERFACEターゲットと表示用の_filesターゲットを使う。.cppを含むソース一覧は表示に使い、自身のソースをコンパイルしない。インクルードパス・公開定義・推移的依存を利用側へ伝える。コンパイラー検出の試験コンパイルは従来どおり行われる。
+
+ライブラリProjectは静的・共有・インターフェースを常に選択できる。依存グラフでは利用側が要求した種類を優先し、同一GUIDの3種類を別ノード／所有ツリーで同時に扱える。非保存の選択がない単独Projectは保存された作成時形式initial_typeを使う。全体.slnの表示のみの未参照Projectも作成時形式を使い、全3形式を無条件に生成しない。ヘッダーしか持たない外部Projectに静的・共有用ソースを要求しないための変更。実際に複数形式を要求される依存は各形式を表示する。

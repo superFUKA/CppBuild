@@ -42,7 +42,7 @@ def encode(value):
     raise SettingsError("Unknown dependency data")
 
 
-def decode(raw, *, legacy=False):
+def decode(raw, *, legacy=False, legacy_types=False):
     if not isinstance(raw, dict):
         raise SettingsError("Dependency record must be an object")
     if "kind" not in raw:  # M3b management data
@@ -57,7 +57,9 @@ def decode(raw, *, legacy=False):
                 raise ValueError("Project dependencies must contain only a GUID and type")
             cls = LegacyDependency
         if "project_type" in values:
-            values["project_type"] = ProjectType(values["project_type"])
+            kind = values["project_type"]
+            values["project_type"] = (ProjectType.INTERFACE_LIBRARY
+                                      if kind == "header_only" and legacy_types else ProjectType(kind))
         return cls(**values)
     except (TypeError, ValueError, KeyError) as exc:
         raise SettingsError("Invalid dependency record") from exc
@@ -101,7 +103,7 @@ def validate(project, value, *, legacy=False):
             path(project, directory)
     else:
         raise SettingsError("Unknown dependency")
-    if not isinstance(value.project_type, ProjectType) or value.project_type not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.HEADER_ONLY}:
+    if not isinstance(value.project_type, ProjectType) or value.project_type not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.INTERFACE_LIBRARY}:
         raise SettingsError("Only library types can be linked")
 
 
@@ -118,7 +120,7 @@ def cmake(project, settings, key, value, target, scope):
         alias = value.target
     elif isinstance(value, ImportedLibrary):
         kind = value.project_type
-        if kind == ProjectType.HEADER_ONLY:
+        if kind == ProjectType.INTERFACE_LIBRARY:
             lines += [f"add_library({alias} INTERFACE IMPORTED)"]
         else:
             if settings.configuration not in value.locations:

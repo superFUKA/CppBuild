@@ -28,7 +28,9 @@ class GuidReferenceTests(unittest.TestCase):
         return (project or self.app).settings.link_solution(self.config, T.STATIC_LIBRARY)
 
     def legacy(self, project):
-        return storage.envelope("project", storage.manifest(project.settings.path, "project"))
+        data = storage.manifest(project.settings.path, "project")
+        data.pop("initial_type", None)
+        return storage.envelope("project", data)
 
     def named_legacy(self):
         first, other = self.link(), self.link(self.tool)
@@ -76,7 +78,7 @@ class GuidReferenceTests(unittest.TestCase):
         self.assertIn(other, self.tool.settings.get().dependencies)
         for project in (self.app, self.tool):
             raw = storage.read_json(project.settings.path)
-            self.assertEqual(raw["schema_version"], 3)
+            self.assertEqual(raw["schema_version"], storage.CURRENT_SCHEMA)
             for entry in raw["data"]["dependencies"].values():
                 self.assertEqual(entry["values"], {"project_guid": guid, "project_type": "static_library"})
         with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
@@ -191,7 +193,7 @@ class GuidReferenceTests(unittest.TestCase):
         raw["data"]["references"]["Alias"] = entry
         storage.atomic_write(self.solution.settings.path, storage.encoded(raw))
         self.assertEqual({n.project.name for n in resolve([self.app])[1]}, {"Lib", "App"})
-        self.assertEqual(storage.read_json(self.solution.settings.path)["schema_version"], 3)
+        self.assertEqual(storage.read_json(self.solution.settings.path)["schema_version"], storage.CURRENT_SCHEMA)
 
     def test_guid_dependency_propagates_observation_changes(self):
         from cppbuild import information

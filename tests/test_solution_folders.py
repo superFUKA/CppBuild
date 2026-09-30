@@ -73,9 +73,9 @@ class SolutionFolderTests(unittest.TestCase):
     def test_transitive_solutions_and_duplicate_names(self):
         self.configure()
         other = Solution.create(self.root / "Other", "External")
-        header = other.add_project("Headers", "Headers", T.HEADER_ONLY)
+        header = other.add_project("Headers", "Headers", T.INTERFACE_LIBRARY)
         header.add_file("include/api.hpp", content="#pragma once", auto_update=False)
-        self.lib.settings.link_solution(other.root / ".cppbuild", T.HEADER_ONLY)
+        self.lib.settings.link_solution(other.root / ".cppbuild", T.INTERFACE_LIBRARY)
         roots, nodes = resolve(self.solution.projects(), include_external_members=True)
         folders = placements(self.solution, nodes)
         self.assertNotEqual(folders[next(n.key for n in nodes if n.project.name == "Lib")],
@@ -90,12 +90,11 @@ class SolutionFolderTests(unittest.TestCase):
 
     def test_unreferenced_multiple_kinds_and_move(self):
         self.configure()
-        values = self.unused.settings.get()
-        values.types = {T.STATIC_LIBRARY: TypeSettingsData(), T.SHARED_LIBRARY: TypeSettingsData()}
-        self.unused.settings.save(values)
+        library = self.external.add_project("Multi", "Multi", T.SHARED_LIBRARY)
         nodes = resolve(self.solution.projects(), include_external_members=True)[1]
-        self.assertEqual({n.settings.project_type for n in nodes if n.project.name == "Unused"},
-                         {T.STATIC_LIBRARY, T.SHARED_LIBRARY})
+        self.assertEqual({n.settings.project_type for n in nodes if n.project.name == "Multi"},
+                         {T.SHARED_LIBRARY})
+        self.assertEqual(len(library.settings.get().types), 3)
         self.solution.move_project("App", "Moved/App", auto_update=False)
         self.assertEqual(self.solution.settings.get().solution_folders.project_folders, {"App": "Apps/Tools"})
 
