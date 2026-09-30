@@ -310,6 +310,10 @@ def _artifacts(project, settings, build):
 def operate(project, operation):
     from .graph import resolve
     project._last_update = None
+    if operation == "clean":
+        settings, source, build = _prepare(project)
+        with storage.write_lock(source):
+            return OperationReport((clean_target(project, settings, build),))
     roots, nodes = resolve([project])
     root = roots[0]
     settings = root.settings
@@ -324,11 +328,11 @@ def operate(project, operation):
             results.append(generated.process)
             if not generated.success:
                 return OperationReport(tuple(results))
-        if operation in {"clean", "rebuild"}:
+        if operation == "rebuild":
             # Dependencies are IMPORTED, so this tree cannot clean their binaries.
             result = clean_target(project, settings, build)
             results.append(result)
-            if not result.success or operation == "clean":
+            if not result.success:
                 return OperationReport(tuple(results))
         for node in nodes:
             _, node_build = _locations(node.project, node.settings)
@@ -350,12 +354,33 @@ def operate(project, operation):
 
 
 def clean_target(project, settings, build):
-    result = tooling.process(settings, ["cmake", "--build", build, "--config", settings.configuration,
-                    "--target", _target(project, settings), "--", "/t:Clean", "/p:BuildProjectReferences=false"], project.root)
+    # Never configure to clean: use only the existing, owned multi-config tree.
+    source, expected_build = _locations(project, settings)
+    marker = build / "cppbuild-owner.json"
+    owner = {"project_root": str(project.root), "source": str(source),
+             "architecture": settings.architecture, "type": settings.project_type.value}
+    try:
+        if build != expected_build:
+            raise SettingsError("Unexpected clean build directory")
+        if not build.exists() or (build.is_dir() and not any(build.iterdir())):
+            result = ProcessReport((), 0, f"Nothing to clean: {build}")
+        else:
+            if not marker.is_file() or storage.read_json(marker) != owner:
+                raise SettingsError("Build directory ownership does not match; clean was not run")
+            if not (build / "CMakeCache.txt").is_file() or not (build / f"{_target(project, settings)}.vcxproj").is_file():
+                raise SettingsError("Existing build tree is incomplete; clean was not run")
+            result = tooling.process(settings, ["cmake", "--build", build, "--config", settings.configuration,
+                            "--target", _target(project, settings), "--", "/t:Clean", "/p:BuildProjectReferences=false"], project.root)
+    except (OSError, SettingsError) as exc:
+        result = ProcessReport((), 1, f"Cannot clean {build}: {exc}")
     information.invalidate(project, bump=False)
-    project._build_signature = information.signature(project, settings)
+    try:
+        project._build_signature = information.signature(project, settings)
+    except SettingsError:
+        project._build_signature = None
     project._build_state = "cleaned" if result.success else "failed"
-    project._known_artifacts = ()
+    if result.success:
+        project._known_artifacts = ()
     return result
 
 

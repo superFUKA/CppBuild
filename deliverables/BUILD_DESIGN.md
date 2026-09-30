@@ -9,6 +9,7 @@
 実装再開時の追加合意：Projectごとに成果物を所有し、全体／個別の呼び出しでは共用する。
 必要な依存先は先にビルドし、相手の成果物を参照する。全体用の複製は作らない。
 個別cleanはそのProjectだけを対象にし、他Project・依存先の成果物を保護する。
+2026-09-30修正：cleanはCMake構成・再生成を行わず、既存の所有ツリーへ`cmake --build ... --target <target> -- /t:Clean /p:BuildProjectReferences=false`を実行する。生成済みのCMAKE_SUPPRESS_REGENERATIONによって自動再生成も抑止される。所有マーカー・キャッシュ・対象.vcxprojを確認し、不完全な既存ツリーを自動修復しない。全体cleanは全体.slnを使わず、選択した個別ツリーを処理する。共有依存の保護を確認できない場合は失敗結果として削除を止める。未生成時の結果・詳細はAPI_DESIGN.mdとUSAGE.mdを参照。
 2026-09-28実装：Project移動時は専用move_projectが当該Projectのgenerated/buildを全体`.cppbuild/relocations/<id>/`へ退避する。旧絶対パスの所有マーカーやCMakeキャッシュを新位置で流用せず、管理設定とソースを移してから全体updateで個別生成物・利用側・全体.slnを再生成する。これはcleanの対象範囲を変更するものではない。詳細と結果形式はAPI_DESIGN.mdを参照。
 M3aで検証したinclude_external_msprojectと全体.sln向けMSBuildのCMake制御を具体化する。
 
@@ -166,7 +167,7 @@ UpdateReportには要求対象、実際に生成したProject・依存、生成�
 
 ## 2026-09-30追加：GUIDによる依存の集約
 
-Dependencyのproject_guidを所属Solutionのreferencesで検索し、登録があれば外部Solutionの同GUID、なければ所属Projectの同GUIDを選ぶ。同じGUIDのローカル・外部登録は拒否する。依存ノードはGUIDと種類で重複排除し、同じGUIDの異なる所在はエラーにする。複数利用元や旧別名から移行した依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。移行済み設定の個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。旧形式の初回移行はSolution全体で行う。
+Dependencyのproject_guidは、まず操作を始めた最上位Solutionのreferencesで検索し、登録があればその所在を依存の深さに関係なく優先する（2026-09-30追加）。最上位に登録がなければ所属Solutionのreferencesで検索し、登録があれば外部Solutionの同GUID、なければ所属Projectの同GUIDを選ぶ。同じGUIDのローカル・外部登録は拒否する。依存ノードはGUIDと種類で重複排除し、最上位の優先で解消されない同じGUIDの異なる所在はエラーにする。優先で使われなかった入れ子側のSolutionは開かず、全体.slnにも表示しない。依存先の生成物は操作ごとに選ばれた所在で再生成するため、最上位からの操作と依存先単独の操作を交互に行うと、依存先の再構成・再ビルドが発生する。複数利用元や旧別名から移行した依存も一つのノードとして構成・表示する。生成物のProject別所有と種類・architecture別の配置は維持する。移行済み設定の個別操作は必要なProjectと依存を読み込み、無関係な兄弟Projectの設定を読み直す前提を置かない。旧形式の初回移行はSolution全体で行う。
 
 ## 2026-09-30追加：移設可能な管理パスと構成の引き継ぎ
 

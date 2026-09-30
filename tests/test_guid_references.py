@@ -404,3 +404,80 @@ class GuidReferenceTests(unittest.TestCase):
         report = self.solution.run()
         self.assertTrue(report.success, str(report))
         self.assertNotIn('Lib.vcxproj"', self.solution._last_update.artifacts[0].read_text(encoding="utf-8-sig"))
+
+
+class TopSolutionPriorityTests(unittest.TestCase):
+    """ECS links deps/STL and deps/A; A registers its own copy at A/deps/STL."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="cppbuild-top-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.ecs = Solution.create(self.root / "ECS", "ECS")
+        self.app = self.ecs.add_project("ECS", "ECS", T.EXECUTABLE)
+        self.stl = Solution.create(self.root / "ECS/deps/STL", "STL")
+        self.stl_lib = self.stl.add_project("STL", "STL", T.STATIC_LIBRARY)
+        self.stl_lib.add_file("src/stl.cpp", content="int stl_value() { return 1; }", auto_update=False)
+        self.a = Solution.create(self.root / "ECS/deps/A", "A")
+        self.a_lib = self.a.add_project("A", "A", T.STATIC_LIBRARY)
+        self.a_lib.add_file("src/a.cpp", content="int stl_value(); int a_value() { return stl_value(); }", auto_update=False)
+        self.copy = self.root / "ECS/deps/A/deps/STL"
+        shutil.copytree(self.stl.root, self.copy)
+        (self.copy / "STL/src/stl.cpp").write_text("int stl_value() { return 2; }", encoding="utf-8")
+        self.a_lib.settings.link_solution(self.copy / ".cppbuild", T.STATIC_LIBRARY)
+
+    def roots(self, nodes):
+        return {n.project.name: n.project.root for n in nodes}
+
+    def test_top_solution_reference_location_wins(self):
+        self.assertEqual(self.roots(resolve([self.a_lib])[1])["STL"], self.copy / "STL")
+        # Without its own registration, ECS uses A's copy through A.
+        self.app.settings.link_solution(self.a.root / ".cppbuild", T.STATIC_LIBRARY)
+        self.assertEqual(self.roots(resolve([self.app])[1])["STL"], self.copy / "STL")
+        self.app.settings.link_solution(self.stl.root / ".cppbuild", T.STATIC_LIBRARY)
+        nodes = resolve([self.app])[1]
+        self.assertEqual([n.project.name for n in nodes].count("STL"), 1)
+        self.assertEqual(self.roots(nodes)["STL"], self.stl_lib.root)
+        a_node = next(n for n in nodes if n.project.name == "A")
+        self.assertEqual([d.project.root for d in a_node.dependencies], [self.stl_lib.root])
+        values = self.ecs.settings.get()
+        values.solution_folders = SolutionFolderSettings()
+        self.ecs.settings.save(values)
+        # Displayed external members never open the unused nested copy.
+        with patch("cppbuild.core.Solution.open", wraps=Solution.open) as opened:
+            nodes = resolve(self.ecs.projects(), include_external_members=True)[1]
+        self.assertTrue(opened.called)
+        self.assertNotIn(self.copy / ".cppbuild", [Path(c.args[0]).resolve() for c in opened.call_args_list])
+        self.assertNotIn(self.copy / "STL", [n.project.root for n in nodes])
+        self.assertEqual(self.roots(resolve([self.a_lib])[1])["STL"], self.copy / "STL")
+
+    def test_unregistered_copies_below_the_top_are_still_rejected(self):
+        b = Solution.create(self.root / "ECS/deps/B", "B")
+        b_lib = b.add_project("B", "B", T.STATIC_LIBRARY)
+        shutil.copytree(self.stl.root, b.root / "deps/STL")
+        b_lib.settings.link_solution(b.root / "deps/STL/.cppbuild", T.STATIC_LIBRARY)
+        self.app.settings.link_solution(self.a.root / ".cppbuild", T.STATIC_LIBRARY)
+        self.app.settings.link_solution(b.root / ".cppbuild", T.STATIC_LIBRARY)
+        with self.assertRaisesRegex(SettingsError, "multiple locations"):
+            resolve([self.app])
+        self.app.settings.link_solution(self.stl.root / ".cppbuild", T.STATIC_LIBRARY)
+        self.assertEqual(self.roots(resolve([self.app])[1])["STL"], self.stl_lib.root)
+
+    @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
+    def test_real_top_solution_location_is_built_and_linked(self):
+        self.app.add_file("src/main.cpp", content="int a_value(); int main() { return a_value() == 1 ? 0 : 1; }",
+                          auto_update=False)
+        self.app.settings.link_solution(self.stl.root / ".cppbuild", T.STATIC_LIBRARY)
+        self.app.settings.link_solution(self.a.root / ".cppbuild", T.STATIC_LIBRARY)
+        for _ in range(2):
+            report = self.app.run()
+            self.assertTrue(report.success, str(report))
+            # A alone switches back to its own copy and still builds.
+            report = self.a_lib.build()
+            self.assertTrue(report.success, str(report))
+        self.ecs.set_build_settings(SolutionBuildSettings(run_projects=["ECS"]))
+        report = self.ecs.run()
+        self.assertTrue(report.success, str(report))
+        sln = self.ecs._last_update.artifacts[0].read_text(encoding="utf-8-sig")
+        self.assertEqual(sln.count('STL.vcxproj"'), 1)
+        self.assertNotIn(str(self.copy), sln)

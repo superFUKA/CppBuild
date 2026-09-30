@@ -190,6 +190,8 @@ solution.update()とproject.update()の全体／個別の入口は確認済み�
 
 Solution／Project双方にbuild・rebuild・clean・runを用意する。操作は各オブジェクトに渡された設定を使う。全体の対象選択はSolution側、詳細はProject側。個別呼び出しは全体の対象選択に左右されない。選択外でも依存先として必要ならビルドする。
 
+2026-09-30 clean修正：APIと引数は維持し、事前のCMake構成・再生成を廃止した。既存の所有ビルドツリーに対して現在のProject設定でMSBuild Cleanを実行し、全体.slnの生成・ソース走査・対象の外部依存解決は行わない。全体cleanはbuild_projectsを使用し、対象外Projectの依存解決で共有成果物を保護する。保護範囲を確認できない場合は削除せず失敗結果を返す。未生成・空のビルドディレクトリ、空の対象選択は成功。所有不一致・未所有・キャッシュ／対象.vcxprojの欠落は失敗結果。処理なしの成功・失敗・保護によるスキップはcommand=()、returncode、outputを持つProcessReportをOperationReport.processesへ格納する。管理設定の読込・検証エラーは従来どおり例外。キャッシュ・VSプロジェクト・保存設定は削除しない。rebuildはビルド用の生成後にCleanとbuildを行う既存動作を維持する。
+
 ```python
 # メソッドで渡す方針は確認済み。具体名・型・フィールドは詳細案。
 app.set_build_settings(ProjectBuildSettings(configuration="Debug", cpp_standard=20))
@@ -272,7 +274,7 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 
 ## 2026-09-30追加：GUIDと外部リンクの自動管理
 
-- 2026-09-30の追加指示により名前指定を廃止。`link_solution(config_directory, link_type)` の2引数で使用し、`name` 引数は受け付けない。同じ対象GUID・同所在は自動で共用し、同じGUIDの異なる所在は拒否する。同一Project内の同GUID・同種類の再登録はエラー。ビルド対象もGUIDと種類で集約する。
+- 2026-09-30の追加指示により名前指定を廃止。`link_solution(config_directory, link_type)` の2引数で使用し、`name` 引数は受け付けない。同じ対象GUID・同所在は自動で共用し、同じGUIDの異なる所在は拒否する。ただし、ビルドなどの依存解決では操作を始めた最上位Solution（Solution操作ではそのSolution、Project操作では所属Solution）の参照一覧に登録されたGUIDは、入れ子の依存先が自分の参照一覧で別の所在に登録していても、最上位の所在を優先して使用する。同一Project内の同GUID・同種類の再登録はエラー。ビルド対象もGUIDと種類で集約する。
 - `ProjectSettingsData.guid` は作成時に生成する不変の識別子。作成設定を流用しても新しいGUIDを発行する。`SolutionSettingsData.references` は対象GUIDから `ProjectReference(project_guid, solution_directory)` への自動管理一覧で、キーと値のGUIDは一致する。`solution.settings.get().references` からコピーを取得でき、通常のSolution設定saveでの一覧変更は拒否する。
 - 内部・外部とも `Dependency(project_guid, project_type)` を保存する。対象名・参照名・外部パスをProject側の依存に保存しない。外部対象の所在はSolutionの参照一覧から取得し、型付きパスは設定ファイル基準の相対パスで保存する。
 - `unlink(dependency_id)` は利用元Projectの依存を解除し、最後の利用がなくなった対象GUIDの登録を自動削除する。Project登録解除やProject設定saveによる依存削除も同じ規則。対象ファイルは削除しない。事前登録・手動削除のAPIは追加しない。

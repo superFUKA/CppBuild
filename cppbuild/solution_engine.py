@@ -107,6 +107,8 @@ def update(solution):
 
 
 def operate(solution, operation):
+    if operation == "clean":
+        return clean(solution)
     roots, nodes = _prepare(solution)
     selected = _selected(solution, roots, operation)
     with storage.write_lock(solution.root / ".cppbuild/operations"), engine.lock_nodes(nodes):
@@ -114,7 +116,7 @@ def operate(solution, operation):
         results = list(generated.processes)
         if not generated.success:
             return generated
-        if operation in {"clean", "rebuild"}:
+        if operation == "rebuild":
             # Only explicitly selected roots are cleaned, never their dependency closure.
             # Protect a selected shared dependency still used by an unselected member.
             protected = set()
@@ -134,8 +136,6 @@ def operate(solution, operation):
                 results.append(result)
                 if not result.success:
                     return engine.OperationReport(tuple(results))
-            if operation == "clean":
-                return engine.OperationReport(tuple(results))
         result = tooling.process(solution._build_settings, ["cmake", "--build", build, "--config", solution._build_settings.configuration, "--target", "cppbuild_selected"], solution.root)
         results.append(result)
         built_keys = set()
@@ -164,3 +164,41 @@ def operate(solution, operation):
             return execute(commands, results, artifacts, parallel=settings.run_parallel,
                            wait=settings.run_wait, continue_on_failure=settings.run_continue_on_failure)
         return engine.OperationReport(tuple(results), tuple(artifacts))
+
+
+def clean(solution):
+    """Clean selected existing trees without generating or opening their dependencies."""
+    from .graph import Node
+
+    solution._last_update = None
+    solution.settings.reload()
+    roots = [Node(p, p._resolved_build_settings(), []) for p in solution.projects()]
+    selected = _selected(solution, roots, "clean")
+    if not selected:
+        return engine.OperationReport((engine.ProcessReport((), 0, "Nothing to clean: no Projects selected"),))
+    protected = set()
+    protection_error = None
+    unselected = [n.project for n in roots if n not in selected]
+    if unselected:
+        try:
+            _, dependencies = resolve(unselected)
+            protected = {n.key for n in dependencies}
+        except (OSError, SettingsError) as exc:
+            # Without the closure we cannot prove that selected shared outputs are unused.
+            protected = {n.key for n in selected}
+            protection_error = str(exc)
+    results = []
+    with storage.write_lock(solution.root / ".cppbuild/operations"), engine.lock_nodes(selected):
+        for node in reversed(selected):
+            if node.key in protected:
+                message = f"Clean skipped for shared dependency: {node.project.name}"
+                if protection_error:
+                    message += f"; could not check unselected dependencies: {protection_error}"
+                results.append(engine.ProcessReport((), 1 if protection_error else 0, message))
+                continue
+            _, build = engine._locations(node.project, node.settings)
+            result = engine.clean_target(node.project, node.settings, build)
+            results.append(result)
+            if not result.success:
+                break
+    return engine.OperationReport(tuple(results))

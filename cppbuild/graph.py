@@ -30,16 +30,28 @@ def resolve(projects, *, include_external_members=False):
         for directory, data in project.solution._build_settings.external_build_settings.items():
             overrides[(project.solution.root / directory).resolve()] = data
 
+    def registry(solution):
+        if solution not in registries:
+            from . import storage
+            if storage.needs_migration(solution.settings.path):
+                solution.settings.reload()
+            registries[solution] = solution.settings._read().references
+        return registries[solution]
+
+    # The Solution that starts the operation chooses the location of a shared GUID,
+    # so nested dependencies may register their own copies of the same Project.
+    preferred = {}
+    for project in projects:
+        project._check_active()
+        for project_guid in registry(project.solution):
+            preferred.setdefault(project_guid, project.solution)
+
     def visit(project, requested=None):
         project._check_active()
         if project not in loaded:
             project.settings.reload()
             loaded.add(project)
-        if project.solution not in registries:
-            from . import storage
-            if storage.needs_migration(project.solution.settings.path):
-                project.solution.settings.reload()
-            registries[project.solution] = project.solution.settings._read().references
+        registry(project.solution)
         settings = project._resolved_build_settings(requested)
         project_guid = project.settings._data.guid
         previous = locations.setdefault(project_guid, project.root)
@@ -56,7 +68,7 @@ def resolve(projects, *, include_external_members=False):
             if not isinstance(reference, Dependency):
                 continue
             try:
-                solution = project.solution
+                solution = preferred.get(reference.project_guid, project.solution)
                 from .references import target
                 if reference.project_guid in registries[solution]:
                     from .core import Solution

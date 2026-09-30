@@ -134,7 +134,7 @@ app_a.settings.unlink(a.dependency_id)  # app_bが使用中なので登録を保
 app_b.settings.unlink(b.dependency_id)  # 最後の利用なので登録を自動削除
 ```
 
-名前指定は廃止したため、`name=` を渡していた呼び出しは引数を削除する。同じ対象GUID・同所在は共用し、同じGUIDの異なる所在はエラー。同じProjectへ同GUID・同種類を二度追加することはできない。ビルド・全体.slnでもGUIDと種類に基づき一つに集約する。単一の利用Projectから同じ対象の異なる種類をリンクすることは従来どおり不可。
+名前指定は廃止したため、`name=` を渡していた呼び出しは引数を削除する。同じ対象GUID・同所在は共用し、同じGUIDの異なる所在はエラー。ただし、ECSが `deps/STL` と `deps/A` をリンクし、Aが自分の参照一覧で同じGUIDのSTLを `A/deps/STL` として登録している場合、ECSのビルドではECSの `deps/STL` を使い、Aの単独ビルドでは `A/deps/STL` を使う。このように、操作を始めた最上位Solutionの参照一覧に登録された所在が優先される。最上位が登録していない同じGUIDのコピーが複数あれば従来どおりエラー。同じProjectへ同GUID・同種類を二度追加することはできない。ビルド・全体.slnでもGUIDと種類に基づき一つに集約する。単一の利用Projectから同じ対象の異なる種類をリンクすることは従来どおり不可。
 
 GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡した設定のGUIDを引き継がず、新しいGUIDを発行する。Project移動はGUIDを保持するので、既存リンクは移動後も同じProjectを参照する。テンプレートから新規作成した所属Projectは新しいGUIDになるが、外部への参照は維持する。
 
@@ -160,3 +160,22 @@ Workspace全体を別の場所へ移してから `Solution.open(new_workspace / 
 - `.cppbuild/build`・`.cppbuild/generated` の既存CMakeキャッシュや生成物は移設先へ持ち込まず、移設先でupdate/buildして再生成する。テンプレート機能はこれらを除外する。
 - ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
 - 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。
+
+# クリーン（2026-09-30修正）
+
+```python
+report = project.clean()   # 現在の種類・architecture・configurationの成果物を削除
+report = solution.clean()  # build_projectsで選択した所属Projectを削除対象にする
+for process in report.processes:
+    print(process.output)
+```
+
+cleanは既存のビルドツリーでMSBuild Cleanを実行する。事前のCMake構成・再生成・ソース走査・コンパイルは行わず、全体.slnも生成しない。生成時の自動再生成抑止とBuildProjectReferences=falseにより依存先を巻き込まない。現在のProjectビルド設定を使い、全体cleanでもProjectごとの構成・ツール指定を使う。
+
+- 個別cleanは対象の管理設定を再読込するが、外部Solutionの依存解決は行わない。ソースがなくなった場合や外部Solutionがオフラインの場合も既存ツリーをcleanできる。管理JSON自体が不正な場合は従来どおり例外になる。
+- 全体cleanは所属設定を再読込し、対象外Projectの依存を解決して共有成果物を保護する。依存解決に失敗して保護範囲を確認できない場合は削除を行わず、理由を含む失敗結果を返す。表示のみの外部Projectは生成しない。
+- ビルドディレクトリが未作成または空なら成功し、出力にNothing to cleanを返す。空の対象選択も成功。保護対象は削除せず理由を返す。これらはcommandが空のProcessReportで表す。
+- 所有マーカー不一致・未所有・既存キャッシュや対象.vcxprojの欠落は失敗結果とし、自動修復・生成は行わない。既存ツリーを使ったClean自体の失敗もOperationReport.success=Falseになる。
+- ソース・保存設定・CMakeキャッシュ・生成したVSプロジェクトは保持する。現在の構成以外の成果物、依存先と対象外Projectの成果物も保持する。キャッシュを丸ごと削除する機能は今回追加していない。
+
+rebuildは従来どおり、ビルドに必要な生成を行ってから対象をCleanし、ビルドする。
