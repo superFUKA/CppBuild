@@ -89,6 +89,8 @@ python -m unittest discover -s tests -v
 ```powershell
 $env:CPPBUILD_TEST_VS2022 = '1'
 $env:CPPBUILD_TEST_GTEST_ARCHIVE = 'C:/archives/v1.14.0.zip'
+$env:CPPBUILD_TEST_NINJA = '1'    # Ninja Multi-Config（WindowsではMSVCをvcvarsallで自動準備）
+$env:CPPBUILD_TEST_VS2026 = '1'   # Visual Studio 18 2026（.slnx）
 python -m unittest discover -s tests -v
 ```
 
@@ -170,12 +172,12 @@ for process in report.processes:
     print(process.output)
 ```
 
-cleanは既存のビルドツリーでMSBuild Cleanを実行する。事前のCMake構成・再生成・ソース走査・コンパイルは行わず、全体.slnも生成しない。生成時の自動再生成抑止とBuildProjectReferences=falseにより依存先を巻き込まない。現在のProjectビルド設定を使い、全体cleanでもProjectごとの構成・ツール指定を使う。
+2026-09-30更新（生成器の切り替え）：cleanは、どの生成器でもCMake標準の `cmake --build <所有ツリー> --config <構成> --target clean` を実行する。そのProjectのビルドツリーのうち、現在の構成の成果物を削除する。ツリー内部で構築するGoogleTestや外部CMakeソース（CMakeSource）の成果物も含む。以前のVS専用のMSBuild Clean（対象ターゲットだけ削除）は廃止した。他の管理Projectは各自のツリーにあり、IMPORTEDとして参照するだけなので削除されない。事前のCMake構成・再生成・ソース走査・コンパイルは行わず、全体.slnも生成しない。生成時の自動再生成抑止により、clean中の再構成は起きない。現在のProjectビルド設定を使い、全体cleanでもProjectごとの構成・ツール指定を使う。MSVCの.pdb・.ilk・.exp等、CMakeのcleanが対象にしない中間ファイルは残る場合がある。
 
 - 個別cleanは対象の管理設定を再読込するが、外部Solutionの依存解決は行わない。ソースがなくなった場合や外部Solutionがオフラインの場合も既存ツリーをcleanできる。管理JSON自体が不正な場合は従来どおり例外になる。
 - 全体cleanは所属設定を再読込し、対象外Projectの依存を解決して共有成果物を保護する。依存解決に失敗して保護範囲を確認できない場合は削除を行わず、理由を含む失敗結果を返す。表示のみの外部Projectは生成しない。
 - ビルドディレクトリが未作成または空なら成功し、出力にNothing to cleanを返す。空の対象選択も成功。保護対象は削除せず理由を返す。これらはcommandが空のProcessReportで表す。
-- 所有マーカー不一致・未所有・既存キャッシュや対象.vcxprojの欠落は失敗結果とし、自動修復・生成は行わない。既存ツリーを使ったClean自体の失敗もOperationReport.success=Falseになる。
+- 所有マーカー不一致・未所有・既存キャッシュや生成ファイル（VSはソリューションファイル、Ninjaはbuild.ninja）の欠落は失敗結果とし、自動修復・生成は行わない。既存ツリーを使ったClean自体の失敗もOperationReport.success=Falseになる。
 - ソース・保存設定・CMakeキャッシュ・生成したVSプロジェクトは保持する。現在の構成以外の成果物、依存先と対象外Projectの成果物も保持する。キャッシュを丸ごと削除する機能は今回追加していない。
 
 rebuildは従来どおり、ビルドに必要な生成を行ってから対象をCleanし、ビルドする。
@@ -203,3 +205,45 @@ INTERFACE_LIBRARYは自身のライブラリバイナリを生成せず、イン
 旧APIのHEADER_ONLYはINTERFACE_LIBRARYへ書き換える。旧schema_version=1/2/3のheader_only設定・内部／外部依存・ImportedLibraryはopen/reloadでschema_version=4へ移行し、GUIDと依存IDを保持する。旧設定に形式が一つならそれを作成時形式とし、複数のライブラリ形式がある場合は静的→共有→インターフェースの順で最初に存在する形式を採用する。ライブラリと実行ファイル等が混在する旧設定は、データを破棄せずエラーにする。移行前に旧版でProjectを分けるなどして整理すること。
 
 移行には設定の書き込み権限が必要。旧種類設定ファイルと旧vs2022-<architecture>-header_only生成物は自動削除しない。新名称の生成物はupdate/buildで生成する。テンプレート・Project移動でも作成時形式を保持する。
+
+# 生成器・コンパイラの切り替え（2026-09-30追加）
+
+```python
+from cppbuild import CMakeSettings, Environment, EnvironmentOptions, ProjectBuildSettings, SolutionBuildSettings
+
+# 省略時はOSごとの固定値：Windows=Visual Studio 17 2022、その他=Ninja Multi-Config
+solution.set_build_settings(SolutionBuildSettings(cmake=CMakeSettings(generator="Ninja Multi-Config")))
+solution.build()
+
+# Visual Studio 2026（.slnx）＋v143ツールセット、32ビット
+solution.set_build_settings(SolutionBuildSettings(
+    architecture="Win32", cmake=CMakeSettings(generator="Visual Studio 18 2026", toolset="v143")))
+
+# Ninja＋特定のコンパイラ（名前または絶対パス）／ツールチェーンファイル（絶対パス）
+CMakeSettings(generator="Ninja Multi-Config", cxx_compiler="clang++", c_compiler="clang")
+CMakeSettings(generator="Ninja Multi-Config", toolchain_file="/opt/toolchains/arm.cmake")
+
+# Projectだけ別の環境にする（CMakeSettingsはオブジェクト単位で親から継承）
+project.set_build_settings(ProjectBuildSettings(cmake=CMakeSettings(generator="Ninja Multi-Config")))
+
+for info in Environment.generators():          # CMakeの生成器一覧＋本ライブラリの対応可否
+    print(info.name, info.supported)
+report = Environment.check(EnvironmentOptions(cmake=CMakeSettings(generator="Ninja Multi-Config")))
+```
+
+- 対応生成器は `Visual Studio 17 2022`・`Visual Studio 18 2026`・`Ninja Multi-Config`。それ以外はCMakeが対応していても `SettingsError`。`Environment.generators()` の `supported` は本ライブラリの実装の有無で、各OS・コンパイラでの検証済みを意味しない。検証済みの組み合わせは実装記録を参照。
+- コンパイラの検出はCMakeが行う。VSの生成器はVSのMSVCを使い、`toolset`（例 `v143`）で切り替える。VSでは `c_compiler`/`cxx_compiler` を指定できない。
+- WindowsでNinjaを使い、コンパイラ無指定または `cl` を指定した場合は、ライブラリがvswhereでVSを探し、vcvarsallでMSVCの環境を用意する。開発者コマンドプロンプトは不要。`toolset` にMSVCのバージョン（例 `"14.44"`）を指定すると、そのバージョンを使う。`ToolSettings.environment` に開発者コマンドプロンプトの環境（`VSCMD_ARG_TGT_ARCH`）を渡した場合はそれを使う。ninjaはPATH、なければVS付属のものを使う。
+- Linux/macOSでは、コンパイラ無指定ならCMakeの通常の探索（環境変数 `CXX`、PATH上の `c++` 等）に従う。ninjaはPATHに必要。
+- `architecture` は既定 `None`（ホスト／コンパイラの既定）。`x64`・`Win32`（32ビットx86）・`ARM64` はどの生成器でも指定できる。VSでは `-A`、Ninja＋MSVCではvcvarsallの対象、macOSでは `CMAKE_OSX_ARCHITECTURES` に対応させる。GCC/Clangでは構成後にCMakeが検出した対象と照合し、違えば失敗にする（別アーキテクチャ向けはツールチェーンファイルで指定）。
+- `UpdateReport.generator` と `UpdateReport.compiler`（`CompilerInfo`：id・version・path・architecture）で、実際に使われた生成器とコンパイラを確認できる。VS以外ではsolution_file/project_file/filters_fileはNone。
+- ビルドツリーは生成器・アーキテクチャ・ツールセット・コンパイラ・ツールチェーンごとに分ける。既定のVS2022は従来の `vs2022-<architecture>-<種類>` を維持し、既存キャッシュを使い続ける。Ninjaは `ninja-mc-<ハッシュ>-<種類>`。同じ生成環境なら、全体と個別の操作で同じツリーと成果物を共用する。生成器を切り替えても、前の環境の成果物は削除しない。
+- 依存でつながるProject、全体操作の全Project、外部Solutionの上書き設定では、構成と生成環境が一致している必要がある。
+- VS2022（.sln）の全体ビルドは、従来どおり全体.slnをMSBuildでビルドする。VS2026（.slnx）は全体.slnxをIDE表示用に生成し、ビルドはNinjaと同じ方式で行う。.slnxではプロジェクトがファイル名で識別されるため、同名で種類の違うProjectを選べないことによる。
+- VS以外の全体操作は、選択Projectと依存先を依存順に1回ずつビルドする。全体のIDEファイルは生成しないため、solution_folders（表示用フォルダーと未参照Projectの一覧）はVSの生成器だけに適用する。
+- 実行できない対象（x64ホストでのARM64ビルド等）は、ビルドはできるが、run/testは実行前にエラーまたは失敗結果になる。
+- 共有ライブラリの実行時探索：WindowsはPATHに依存先の.dllの場所を追加する。Linux/macOSはCMakeがビルドツリーに設定するRPATHを使い、補助として `LD_LIBRARY_PATH`／`DYLD_LIBRARY_PATH` も設定する。
+- `ImportedLibrary` の共有ライブラリのインポートライブラリは、インポートライブラリを使う対象（MSVC・MinGW）でだけ必須。
+- WindowsのNinja＋MSVCでは、パスに非ASCII文字（日本語等）があると、ヘッダー依存を追跡できない。MSVCの `/showIncludes` が出力するパスはコンソールのコードページで、Ninja 1.13はUTF-8として比較するため。この場合、ビルドは正しく完了するが、毎回再コンパイル・再リンクされる（差分ビルドにならない）。ASCIIパスでは差分ビルドになることを確認済み。VSの生成器にはこの制約はない。
+- ツールチェーンファイルの内容の変更や、コンパイラ無指定時の環境変数以外の変化は検出しない。この場合は `.cppbuild/build` の該当ツリーを利用者が削除する。
+- ファイル・Projectの移動とテンプレート展開は、Linux/macOSでも既存の宛先を上書きしない。ディレクトリは宛先を排他作成してからrename、ファイルはハードリンクしてから元を削除する（ハードリンク非対応なら排他作成してコピー）。

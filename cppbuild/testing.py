@@ -60,12 +60,15 @@ def _test(root, nodes):
             results.append(generated.process)
             if not generated.success:
                 return TestReport(project.name, tuple(results), diagnostics=("Configure failed; tests not run",))
-            built = tooling.process(node.settings, ["cmake", "--build", build, "--config", node.settings.configuration,
-                                    "--target", engine._target(node.project, node.settings), "--parallel", node.settings.parallel], node.project.root)
+            built = engine.build_node(node)
             results.append(built)
             information.built(node.project, node.settings, engine._artifacts(node.project, node.settings, build) if built.success else (), built.success)
             if not built.success:
                 return TestReport(project.name, tuple(results), diagnostics=("Build failed; tests not run",))
+        try:
+            engine.check_runnable(project, settings)
+        except SettingsError as exc:
+            return TestReport(project.name, tuple(results), diagnostics=(str(exc),))
         _, build = engine._locations(project, settings)
         output = build / ("cppbuild-tests-" + uuid.uuid4().hex + ".xml")
         tested = tooling.process(settings, ["ctest", "--test-dir", build, "-C", settings.configuration,

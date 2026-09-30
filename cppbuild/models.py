@@ -107,9 +107,23 @@ class ToolSettings:
 
 
 @dataclass
+class CMakeSettings:
+    """Generator and compiler selection. Ephemeral like every build setting.
+
+    generator None resolves per host OS (Windows: Visual Studio 17 2022,
+    others: Ninja Multi-Config), never to CMake's own default.
+    """
+    generator: str | None = None
+    toolset: str | None = None
+    c_compiler: str | None = None
+    cxx_compiler: str | None = None
+    toolchain_file: str | None = None
+
+
+@dataclass
 class ProjectBuildSettings:
     configuration: str | Inheritance = INHERIT
-    architecture: str | Inheritance = INHERIT
+    architecture: str | None | Inheritance = INHERIT
     cpp_standard: int | Inheritance = INHERIT
     project_type: ProjectType | None = None
     parallel: int = 1
@@ -118,12 +132,13 @@ class ProjectBuildSettings:
     test_parallel: int = 1
     googletest_archive: str | None = None
     tools: ToolSettings | Inheritance = INHERIT
+    cmake: CMakeSettings | Inheritance = INHERIT
 
 
 @dataclass
 class SolutionBuildSettings:
     configuration: str = "Debug"
-    architecture: str = "x64"
+    architecture: str | None = None
     cpp_standard: int = 20
     build_projects: list[str] | None = None
     run_projects: list[str] = field(default_factory=list)
@@ -135,6 +150,7 @@ class SolutionBuildSettings:
     test_projects: list[str] | None = None
     test_continue_on_failure: bool = True
     tools: ToolSettings = field(default_factory=ToolSettings)
+    cmake: CMakeSettings = field(default_factory=CMakeSettings)
 
 
 @dataclass(frozen=True)

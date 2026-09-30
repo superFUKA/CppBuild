@@ -1,5 +1,60 @@
 # 実装・検証記録
 
+## 最新の現在地：2026-09-30 生成器・コンパイラの切り替えを実装
+
+合意内容（ユーザー確認済み）：
+- 生成器の省略時はOSごとの固定値にする。
+- VSを前提にしていた箇所はすべて修正対象にする。
+- cleanはNinjaの挙動（CMake標準のclean）へ統一する。
+- 検証はGitHub Actionsを使わず、手元の環境でコンパイラとソリューション形式を切り替えて行う。
+
+API・利用方法は [API設計](API_DESIGN.md) と [利用手順](USAGE.md) の「生成器・コンパイラの切り替え」、判断は [設計整理メモ](DESIGN_NOTES.md) を参照。
+
+実装：
+- `cppbuild/generators.py`（新規）：生成器・コンパイラ・アーキテクチャの解決、vswhere／vcvarsallによるMSVC環境、検出コンパイラの読み取りと照合、`cmake -E capabilities`。
+- `models.CMakeSettings`、`architecture=None` の既定、ProjectのINHERIT。
+- engine：ビルドツリーの分離と所有情報（旧VS2022マーカーも有効）、`file(GENERATE)` による成果物の役割出力、全生成器共通の `--target clean`、実行時の共有ライブラリ探索、実行不能な対象の拒否。
+- 全体操作：VS2022は.sln＋MSBuild、VS2026（.slnx）とNinjaはPython側の依存順ビルド。
+- Environment：`EnvironmentOptions.cmake`、`GeneratorInfo`、`Environment.generators()`。
+- ImportedLibraryのインポートライブラリ必須判定を、生成するCMake側へ移した。
+- `storage.rename_no_replace` によるPOSIXの上書きしない移動（ファイル・Project移動、テンプレート展開）。
+
+検証環境：Windows 11、Python 3.12.10、CMake 4.2.3、VS 2022 Community 17.14、VS 2026 Community 18.10、VS付属のNinja 1.13.2。
+
+- `CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1 python -m unittest discover -s tests`
+- 結果：全156件成功、skipなし、249.205秒。フラグなしでは27件がskip。実ビルド試験27件の内訳：既存のVS2022が20件、Ninjaが4件、VS2026が3件。GoogleTestは固定版をオンラインで取得した。
+- 追加した試験：
+  - `tests/test_generators.py`（13件）：設定検証、継承、キャッシュ名の互換、旧マーカー、生成環境の一致、コンパイラ記録の照合、コマンドライン、成果物の役割出力、上書きしないrename。POSIXの分岐はWindows上でos.nameを差し替えて確認した。
+  - `tests/test_generators_real.py`：Ninja・VS2026それぞれで次を確認した。
+    - 静的・共有・インターフェースへの依存
+    - Debug/Release
+    - 個別・全体の update/build/run/clean/rebuild/test
+    - cleanの範囲（該当構成のみ、依存先は保持）
+    - .slnx／build.ninjaの生成、GoogleTest
+  - Ninjaでは、さらに次を確認した。
+    - MSVC 14.44・14.51でのx86ビルドと実行（ポインターサイズ4）
+    - `cxx_compiler="cl"`
+    - ARM64のビルド成功と実行拒否
+    - 存在しないコンパイラの拒否
+    - ASCIIパスでの差分ビルド（no work to do）
+  - VS2026では、v143ツールセット＋Win32を確認した。
+- 既存の試験は、cleanの仕様変更に合わせて2件を更新した。`test_clean` は `/t:Clean` から `--target clean` への変更とソリューションファイルの前提。`test_external` は、ツリー内部の外部CMakeソースの成果物がcleanで削除されることの確認。
+- 利用検証（`usage_tests/`、6シナリオ・84操作）：VS2022・Ninja＋MSVC・VS2026で、それぞれ全シナリオPASS。詳細は [利用検証結果](../usage_tests/RESULTS.md)。
+  - 発見・修正1：ランナーが旧 `HEADER_ONLY` を使っていた（`ae714f1` 以来の既存不具合）。
+  - 発見・修正2：テンプレート作成時のrenameでWinError 5が断続的に発生した。Windowsでは、アクセス拒否時に最大10秒再試行するようにした。上書きしない性質は変わらない。
+  - 修正後の最終確認：全156件成功、skipなし、252.349秒。
+- スモーク確認（スクラッチ領域）：VS2022・VS2026・Ninja（MSVC 14.51、自動選択）・Ninja（14.44、x86）・VS2026（v143、x86）で、個別／全体の全操作が成功した。
+
+制約・未検証：
+- Linux/macOS（GCC・Clang・AppleClang）は実装のみで、実環境では未検証。RPATH／LD_LIBRARY_PATH、POSIXの移動、macOSのアーキテクチャ指定を含む。
+- clang-cl・MinGWは未導入のため未検証。
+- WindowsのNinja＋MSVCでは、非ASCIIパスでヘッダー依存を追跡できない。原因は、/showIncludesのコードページとNinjaのUTF-8比較の不一致。ビルド自体は正しいが、毎回再コンパイルになる。
+- 既存ツリーは一度updateして役割出力を作るまで、依存側から参照できない。
+- ツールチェーンファイルの内容の変更は検出しない。
+- 今回の変更は未コミット。
+
+以下の「未コミット」「次の作業」は各記録時点の履歴であり、最新状態は本節とGitを優先する。
+
 ## 2026-09-19：公開APIの利用検証を公開用に整理
 
 - `usage_tests/`にC++ Solutionの作成からビルド・実行・CTestまでを行う6シナリオと再現手順を追加。既存のローカル集計とRESULTS.mdを照合し、全6シナリオ成功、操作・確認84件を確認した。これは既存unittestの58件とは別の利用検証である。

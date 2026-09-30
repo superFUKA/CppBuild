@@ -9,10 +9,18 @@ import time
 import traceback
 
 from cppbuild import (
-    CMakePackage, CMakeSource, ImportedLibrary, ProjectBuildSettings,
+    CMakePackage, CMakeSettings, CMakeSource, ImportedLibrary, ProjectBuildSettings,
     ProjectSettingsData, ProjectType as T, SettingsConflictError, SettingsError,
     Solution, SolutionBuildSettings, TemplateTools, ToolSettings, TypeSettingsData,
 )
+
+
+# Generation environment for every scenario; set from --generator/--architecture.
+ENVIRONMENT = {}
+
+
+def settings(**values):
+    return SolutionBuildSettings(**values, **ENVIRONMENT)
 
 
 def serial(value):
@@ -77,7 +85,7 @@ def lifecycle(s):
     project.settings.save(data)
     s.report('environment', project.check_environment())
     for configuration, standard in [('Debug', 17), ('Release', 20)]:
-        solution.set_build_settings(SolutionBuildSettings(configuration=configuration, cpp_standard=standard))
+        solution.set_build_settings(settings(configuration=configuration, cpp_standard=standard))
         s.report(configuration + ' update', project.update())
         result = s.report(configuration + ' run', project.run())
         s.check(configuration + ' output', '42:' in output(result))
@@ -112,16 +120,16 @@ def lifecycle(s):
 
 def libraries(s):
     solution = Solution.create(s.root / 'Solution', 'Libraries')
-    headers = solution.add_project('Headers', 'Headers', T.HEADER_ONLY)
+    headers = solution.add_project('Headers', 'Headers', T.INTERFACE_LIBRARY)
     add(headers, 'include/number.hpp', '#pragma once\ninline int number() { return 40; }\n')
     data = headers.settings.get()
-    data.types[T.HEADER_ONLY].public_definitions = ['HEADER_BONUS=2']
+    data.types[T.INTERFACE_LIBRARY].public_definitions = ['HEADER_BONUS=2']
     headers.settings.save(data)
     dual = solution.add_project('Math', 'Math', T.STATIC_LIBRARY, ProjectSettingsData('Math', {
         T.STATIC_LIBRARY: TypeSettingsData(), T.SHARED_LIBRARY: TypeSettingsData()}))
     dual.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
     add(dual, 'src/math.cpp', '#include <number.hpp>\n__declspec(dllexport) int answer() { return number() + HEADER_BONUS; }\n')
-    dual.settings.link_project(headers, T.HEADER_ONLY)
+    dual.settings.link_project(headers, T.INTERFACE_LIBRARY)
     consumers = []
     for name, kind in [('StaticApp', T.STATIC_LIBRARY), ('SharedApp', T.SHARED_LIBRARY)]:
         consumer = app(solution, name, 'std::cout << answer() << "\\n"; return answer() == 42 ? 0 : 1;')
@@ -130,7 +138,7 @@ def libraries(s):
         consumer.settings.link_project(dual, kind)
         consumers.append(name)
     for configuration in ['Debug', 'Release']:
-        solution.set_build_settings(SolutionBuildSettings(configuration=configuration, build_projects=consumers,
+        solution.set_build_settings(settings(configuration=configuration, build_projects=consumers,
                                                          run_projects=consumers, parallel=2, run_parallel=2))
         s.report(configuration + ' whole solution build', solution.build())
         result = s.report(configuration + ' static and shared consumers', solution.run())
@@ -155,8 +163,8 @@ def external(s):
     source.write_text('int vendor();\n' + source.read_text(encoding='utf-8'), encoding='utf-8')
     link = consumer.settings.link_solution(provider.root / '.cppbuild', T.STATIC_LIBRARY)
     for configuration in ['Debug', 'Release']:
-        solution.set_build_settings(SolutionBuildSettings(configuration=configuration, external_build_settings={
-            str(provider.root / '.cppbuild'): SolutionBuildSettings(configuration=configuration)}))
+        solution.set_build_settings(settings(configuration=configuration, external_build_settings={
+            str(provider.root / '.cppbuild'): settings(configuration=configuration)}))
         s.report(configuration + ' external solution', consumer.run())
     consumer.settings.unlink(link.dependency_id)
     imported = consumer.settings.link_imported_library(ImportedLibrary(T.STATIC_LIBRARY, {
@@ -201,13 +209,13 @@ def execution(s):
         project.set_build_settings(ProjectBuildSettings(run_arguments=['argument with spaces']))
     def ran(report):
         return [p.output.strip() for p in report.processes if p.output.startswith('RUN:')]
-    solution.set_build_settings(SolutionBuildSettings(run_projects=['First', 'Failure', 'Last']))
+    solution.set_build_settings(settings(run_projects=['First', 'Failure', 'Last']))
     result = s.report('stop at nonzero exit', solution.run(), success=False)
     s.check('stopped before Last', ran(result) == ['RUN:First:argument with spaces', 'RUN:Failure:argument with spaces'])
-    solution.set_build_settings(SolutionBuildSettings(run_projects=['Failure', 'Last', 'First'], run_continue_on_failure=True))
+    solution.set_build_settings(settings(run_projects=['Failure', 'Last', 'First'], run_continue_on_failure=True))
     result = s.report('continue after nonzero exit', solution.run(), success=False)
     s.check('requested execution order', ran(result) == [f'RUN:{n}:argument with spaces' for n in ['Failure', 'Last', 'First']])
-    solution.set_build_settings(SolutionBuildSettings(run_projects=['Last', 'First'], run_parallel=2, run_wait=False))
+    solution.set_build_settings(settings(run_projects=['Last', 'First'], run_parallel=2, run_wait=False))
     pending = solution.run()
     result = s.report('asynchronous parallel completion', pending.wait(timeout=60))
     s.check('done after wait', pending.done and pending.success)
@@ -244,13 +252,14 @@ def templates(s):
     s.check('before and after order', events[-2:] == ['before_build', 'after_build'])
     solution.off(before)
     solution.off(after)
-    solution.set_build_settings(SolutionBuildSettings(configuration='Release', run_projects=['App']))
+    solution.set_build_settings(settings(configuration='Release', run_projects=['App']))
     s.report('original run', solution.run())
     template = TemplateTools.create_solution_template(solution, s.root / 'Template')
     clone = Solution.create(s.root / 'Restored', 'Restored', template=template)
     s.check('template omits generated build trees', not list(clone.root.rglob('CMakeCache.txt')))
     s.check('template restores source', (clone.get_project('App').root / 'include/event.hpp').is_file())
     s.check('template omits ephemeral settings', clone.info().build_settings.configuration == 'Debug')
+    clone.set_build_settings(settings())  # Build settings are not restored; select the environment again.
     s.report('restored consumer runs', clone.get_project('App').run())
     material_path = clone.root / clone.settings.file_templates()['function']
     clone.settings.set_file_template('alias', material_path)
@@ -274,13 +283,13 @@ def testing(s):
             text += 'TEST(Value, IntentionalFailure) { EXPECT_EQ(value(), 99); }\n'
         add(project, 'src/test.cpp', text)
     for configuration in ['Debug', 'Release']:
-        solution.set_build_settings(SolutionBuildSettings(configuration=configuration, test_projects=['Passing']))
+        solution.set_build_settings(settings(configuration=configuration, test_projects=['Passing']))
         result = s.report(configuration + ' passing and skipped cases', solution.test())
         s.check(configuration + ' case statuses', {c.status for c in result.cases} == {'passed', 'skipped'})
-    solution.set_build_settings(SolutionBuildSettings(test_projects=['Failing', 'Passing'], test_continue_on_failure=False))
+    solution.set_build_settings(settings(test_projects=['Failing', 'Passing'], test_continue_on_failure=False))
     result = s.report('test stop on failure', solution.test(), success=False)
     s.check('test stopped', len(result.projects) == 1 and any(c.status == 'failed' for c in result.cases))
-    solution.set_build_settings(SolutionBuildSettings(test_projects=['Failing', 'Passing'], test_continue_on_failure=True))
+    solution.set_build_settings(settings(test_projects=['Failing', 'Passing'], test_continue_on_failure=True))
     result = s.report('test continue after failure', solution.test(), success=False)
     s.check('both test projects executed', len(result.projects) == 2)
     s.report('individual ignores solution selection', solution.get_project('Passing').test())
@@ -301,7 +310,11 @@ def main():
     source = parser.add_mutually_exclusive_group()
     source.add_argument('--gtest-archive', type=Path, help='GoogleTest 1.14.0 ZIP (fixed hash verified by CMake)')
     source.add_argument('--online', action='store_true', help='Allow the testing scenario to fetch GoogleTest')
+    parser.add_argument('--generator', help='CMake generator; default: fixed per host OS')
+    parser.add_argument('--architecture', choices=['x64', 'Win32', 'ARM64'], help='Default: host/compiler default')
+    parser.add_argument('--toolset', help='VS toolset or MSVC version for Ninja')
     args = parser.parse_args()
+    ENVIRONMENT.update(cmake=CMakeSettings(generator=args.generator, toolset=args.toolset), architecture=args.architecture)
     selected = args.scenario or list(SCENARIOS)
     if 'testing' in selected and not (args.gtest_archive or args.online):
         parser.error('testing requires --gtest-archive ZIP or --online; no silent skips')
@@ -310,8 +323,9 @@ def main():
         parser.error('GoogleTest archive does not exist')
     root = (args.output or Path('.test-work') / ('usage-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))).resolve()
     root.mkdir(parents=True, exist_ok=False)
-    summary = {'output': str(root), 'scenarios': [], 'success': False}
-    print(f'Output: {root}', flush=True)
+    summary = {'output': str(root), 'generator': args.generator, 'architecture': args.architecture,
+               'toolset': args.toolset, 'scenarios': [], 'success': False}
+    print(f'Output: {root} generator={args.generator or "default"} architecture={args.architecture or "default"}', flush=True)
     for name in selected:
         folder = root / name
         folder.mkdir()

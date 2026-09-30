@@ -3,7 +3,6 @@ from copy import deepcopy
 from contextlib import ExitStack
 from dataclasses import asdict
 import hashlib
-import os
 from pathlib import Path
 import re
 import uuid
@@ -16,7 +15,7 @@ from .models import (
 from . import storage
 from . import dependencies as dependency_data
 from .events import Dispatcher, operation
-from . import tooling
+from . import tooling, generators
 
 
 def _name(value):
@@ -39,13 +38,18 @@ def _build_settings(value, seen=None):
             raise SettingsError("Solution tools cannot inherit")
     else:
         tooling.validate(value.tools)
+    if value.cmake is INHERIT:
+        if isinstance(value, SolutionBuildSettings):
+            raise SettingsError("Solution CMake settings cannot inherit")
+    else:
+        generators.validate(value.cmake)
     for key, allowed in (("configuration", {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}),
-                         ("architecture", {"x64", "Win32", "ARM64"}),
+                         ("architecture", {None, "x64", "Win32", "ARM64"}),
                          ("cpp_standard", {17, 20, 23})):
         item = getattr(value, key)
         if item is not INHERIT:
             try:
-                valid = item in allowed and type(item) in (str, int)
+                valid = item in allowed and type(item) in (str, int, type(None))
             except TypeError:
                 valid = False
             if not valid:
@@ -468,7 +472,7 @@ class Project:
         values = deepcopy(self._build_settings)
         if requested_type is not None:
             values.project_type = requested_type
-        for key in ("configuration", "architecture", "cpp_standard", "tools"):
+        for key in ("configuration", "architecture", "cpp_standard", "tools", "cmake"):
             if getattr(values, key) is INHERIT:
                 setattr(values, key, deepcopy(getattr(self.solution._build_settings, key)))
         if values.project_type is None:
@@ -543,10 +547,8 @@ class Project:
         if destination.exists():
             raise FileExistsError(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Windows rename refuses a destination created concurrently as well.
-        if os.name != "nt":
-            raise NotImplementedError("Move currently targets Windows")
-        source.rename(destination)
+        # Refuses a destination created concurrently as well.
+        storage.rename_no_replace(source, destination)
         return file_report(self, [source, destination], auto_update)
 
     def check_environment(self):

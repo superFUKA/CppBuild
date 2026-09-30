@@ -1,5 +1,33 @@
 # 作業の引き継ぎ
 
+## 最新の現在地・次の作業（2026-09-30）
+
+**生成器・コンパイラの切り替えを実装済み（未コミット）。** 非保存の `CMakeSettings` で、VS2022（.sln）・VS2026（.slnx）・Ninja Multi-Configとコンパイラ・アーキテクチャを選択できる。生成・ビルド・clean・rebuild・実行・テストに反映する。
+
+- **合意**：
+  - 生成器の省略時はOSごとの固定値（Windows=VS2022、その他=Ninja Multi-Config）。
+  - VSを前提にしていた箇所はすべて修正対象。
+  - cleanはCMake標準の `--target clean` へ統一（所有ツリーの該当構成を削除）。
+  - 検証は手元の環境で行い、GitHub Actionsは当面なし。
+- **検証**：全156件成功、skipなし。実ビルド試験は27件（VS2022 20件、Ninja 4件、VS2026 3件）。
+- **利用検証**：`usage_tests/` の6シナリオが、VS2022・Ninja・VS2026で全PASS。
+- **未検証**：Linux/macOS（実装のみ）、clang-cl・MinGW。
+- **既知の制約**：WindowsのNinja＋MSVCでは、非ASCIIパスで差分ビルドにならない。
+- **詳細**：[実装記録](deliverables/IMPLEMENTATION_STATUS.md) の最新節、利用方法は [利用手順](deliverables/USAGE.md)、判断は [設計整理メモ](deliverables/DESIGN_NOTES.md)。計画・調査の経緯は [対応計画](deliverables/CROSS_PLATFORM_PLAN.md)・[調査](deliverables/CROSS_PLATFORM_REVIEW.md)。
+- **次の作業**：
+  1. ユーザーの指示に応じてコミットする（メッセージは日本語）。
+  2. Linux/macOS・clang-clでの実検証。
+  3. 単一構成の生成器・Xcodeへの拡張。
+- **維持する条件**：
+  - Projectごとの独立CMake構成
+  - 同一生成環境での全体／個別の成果物共用
+  - ビルド設定の非保存
+  - GUIDによる依存解決
+  - clean前の再生成禁止と共有依存の保護
+- **作業ツリー**：既存の `relocation-check-l3g0bdd1/` はアクセス問題のある未追跡ディレクトリ。作業に含めず、削除・コミットしない。
+
+以下は過去の進捗・設計整理の記録。次の作業は上記と対応計画を優先する。
+
 > 2026-09-17 実装開始後の追記：M1（管理モデル・設定保存・非保存ビルド設定）を実装し、自動テスト13件を確認。最新の進捗・検証・次の作業は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)を参照。以下の「未着手」「実装はまだ開始しない」は設計整理時点の記録であり、今回の実装依頼を制限しない。設計の合意状態は維持する。
 
 更新日：2026-09-30。

@@ -1,14 +1,16 @@
-"""Independent VS2022 generation. Dependency binaries remain owned by their Project."""
+"""Independent per-Project CMake generation. Dependency binaries remain owned by their Project."""
 from contextlib import ExitStack, contextmanager
-from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
 import os
 import subprocess
+import sys
 
 from .models import ProjectType, SettingsError
 from . import storage
-from . import tooling, information
+from . import tooling, information, generators
+
+CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,8 @@ class UpdateReport:
     solution_file: Path | None
     project_file: Path | None
     filters_file: Path | None
+    generator: str | None = None
+    compiler: object = None
 
     @property
     def success(self):
@@ -111,8 +115,9 @@ def _directory_link(path):
 
 
 def _locations(project, settings):
-    # Debug/Release intentionally share a multi-config cache. Architecture and kind do not.
-    context = f"vs2022-{settings.architecture}-{settings.project_type.value}"
+    # Debug/Release intentionally share a multi-config cache. Generator, compiler,
+    # architecture and kind do not.
+    context = f"{generators.resolve(settings).context}-{settings.project_type.value}"
     base = storage.contained(project.root, ".cppbuild")
     source = storage.contained(base, f"generated/{context}")
     build = storage.contained(base, f"build/{context}")
@@ -175,18 +180,13 @@ def _cmake(project, settings, files, dependencies=()):
             imported_kind = "STATIC" if child_kind == ProjectType.STATIC_LIBRARY else "SHARED"
             lines.append(f"add_library({alias} {imported_kind} IMPORTED)")
             _, child_build = _locations(node.project, node.settings)
-            for configuration in ("Debug", "Release", "RelWithDebInfo", "MinSizeRel"):
-                artifacts = _artifacts(node.project, replace(node.settings, configuration=configuration), child_build)
-                suffix = ".lib" if child_kind == ProjectType.STATIC_LIBRARY else ".dll"
-                location = next((p for p in artifacts if p.suffix.lower() == suffix), None)
-                if location is None:
-                    raise SettingsError(f"Missing {suffix} metadata for {node.project.name}; update dependency first")
-                lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_LOCATION_{configuration.upper()} {_path(location)})")
-                if child_kind == ProjectType.SHARED_LIBRARY:
-                    implib = next((p for p in artifacts if p.suffix.lower() == ".lib"), None)
-                    if implib is None:
-                        raise SettingsError(f"Missing import library metadata for {node.project.name}")
-                    lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_IMPLIB_{configuration.upper()} {_path(implib)})")
+            for configuration in CONFIGURATIONS:
+                outputs = _outputs(node.project, child_build, configuration)
+                lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_LOCATION_{configuration.upper()} {_path(outputs['file'])})")
+                # Only DLL platforms link through a separate import library.
+                linker = outputs.get("linker")
+                if child_kind == ProjectType.SHARED_LIBRARY and linker is not None and linker != outputs["file"]:
+                    lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_IMPLIB_{configuration.upper()} {_path(linker)})")
         for directory in child_data.include_directories:
             include = storage.contained(node.project.root, directory)
             if include.is_dir():
@@ -221,9 +221,29 @@ def _cmake(project, settings, files, dependencies=()):
                   'if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.2)',
                   '  set(cppbuild_discovery_args DISCOVERY_EXTRA_ARGS "--gtest_output=")', 'endif()',
                   f'gtest_discover_tests({name} DISCOVERY_MODE PRE_TEST WORKING_DIRECTORY {_path(project.root)} ${{cppbuild_discovery_args}})']
+    if kind != ProjectType.INTERFACE_LIBRARY:
+        # Output roles per configuration, independent of platform file suffixes.
+        roles = f"file=$<TARGET_FILE:{name}>\\n"
+        if kind in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}:
+            roles += f"linker=$<TARGET_LINKER_FILE:{name}>\\n"
+        lines += [f'file(GENERATE OUTPUT "${{CMAKE_BINARY_DIR}}/cppbuild-outputs-$<CONFIG>.txt" CONTENT "{roles}")']
     if files:
         lines += [f"source_group(TREE {_path(project.root)} PREFIX \"\" FILES\n  {listed}\n)"]
     return "\n".join(lines) + "\n"
+
+
+def _outputs(project, build, configuration):
+    path = build / f"cppbuild-outputs-{configuration}.txt"
+    if not path.is_file():
+        raise SettingsError(f"Missing output metadata for {project.name}; update it first")
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key] = Path(value)
+    if "file" not in values:
+        raise SettingsError(f"Invalid output metadata for {project.name}")
+    return values
 
 
 def _target(project, settings):
@@ -239,31 +259,54 @@ def _prepare(project):
     return settings, source, build
 
 
+def _owner(project, settings, source):
+    return {"project_root": str(project.root), "source": str(source), "type": settings.project_type.value,
+            "environment": generators.resolve(settings).identity()}
+
+
+def _owned(project, settings, source, marker):
+    data = storage.read_json(marker)
+    if data == _owner(project, settings, source):
+        return True
+    # Trees from before generator selection record only the VS2022 architecture.
+    toolchain = generators.resolve(settings)
+    legacy = {"project_root": str(project.root), "source": str(source),
+              "architecture": toolchain.architecture, "type": settings.project_type.value}
+    return toolchain.generator == "Visual Studio 17 2022" and not toolchain.toolset and not toolchain.toolchain_file and data == legacy
+
+
 def _generate(project, settings, source, build, dependencies=()):
     project._last_update = None
+    toolchain = generators.resolve(settings)
     files = _scan(project)
     text = _cmake(project, settings, files, dependencies)
     marker = build / "cppbuild-owner.json"
-    owner = {"project_root": str(project.root), "source": str(source),
-             "architecture": settings.architecture, "type": settings.project_type.value}
     if marker.exists():
-        if storage.read_json(marker) != owner:
+        if not _owned(project, settings, source, marker):
             raise SettingsError("Build directory ownership does not match")
     elif build.exists() and any(build.iterdir()):
         raise SettingsError("Refusing to use an unowned build directory")
-    storage.atomic_write(marker, storage.encoded(owner))
+    storage.atomic_write(marker, storage.encoded(_owner(project, settings, source)))
     cmake = source / "CMakeLists.txt"
     if not cmake.exists() or cmake.read_text(encoding="utf-8") != text:
         storage.atomic_write(cmake, text.encode("utf-8"))
     query = build / ".cmake/api/v1/query/client-cppbuild/codemodel-v2"
     query.parent.mkdir(parents=True, exist_ok=True)
     query.touch()
-    result = tooling.process(settings, ["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", settings.architecture], project.root)
+    result = tooling.process(settings, toolchain.configure(source, build), project.root)
+    compiler = None
+    if result.success:
+        compiler = generators.compiler(build)
+        error = generators.verify(toolchain, compiler)
+        if error is not None:
+            result = ProcessReport(result.command, 1, result.output + "\n" + error)
     target = _target(project, settings)
+    ide = result.success and toolchain.visual_studio
     report = UpdateReport(result, files, build,
-                          build / f"{project.name}.sln" if result.success else None,
-                          build / f"{target}.vcxproj" if result.success else None,
-                          build / f"{target}.vcxproj.filters" if result.success else None)
+                          build / f"{project.name}{toolchain.solution_suffix}" if ide else None,
+                          build / f"{target}.vcxproj" if ide else None,
+                          build / f"{target}.vcxproj.filters" if ide else None,
+                          toolchain.generator, compiler)
     project._last_update = report
     information.generated(project, settings, report)
     return report
@@ -307,6 +350,12 @@ def _artifacts(project, settings, build):
     raise SettingsError("Target/configuration missing from CMake File API")
 
 
+def build_node(node):
+    _, build = _locations(node.project, node.settings)
+    return tooling.process(node.settings, ["cmake", "--build", build, "--config", node.settings.configuration,
+                           "--target", _target(node.project, node.settings), "--parallel", node.settings.parallel], node.project.root)
+
+
 def operate(project, operation):
     from .graph import resolve
     project._last_update = None
@@ -329,24 +378,20 @@ def operate(project, operation):
             if not generated.success:
                 return OperationReport(tuple(results))
         if operation == "rebuild":
-            # Dependencies are IMPORTED, so this tree cannot clean their binaries.
+            # Dependencies are IMPORTED from their own trees, so this clean cannot remove them.
             result = clean_target(project, settings, build)
             results.append(result)
             if not result.success:
                 return OperationReport(tuple(results))
         for node in nodes:
             _, node_build = _locations(node.project, node.settings)
-            result = tooling.process(node.settings, ["cmake", "--build", node_build, "--config", node.settings.configuration,
-                              "--target", _target(node.project, node.settings), "--parallel", node.settings.parallel], node.project.root)
+            result = build_node(node)
             results.append(result)
             information.built(node.project, node.settings, _artifacts(node.project, node.settings, node_build) if result.success else (), result.success)
             if not result.success:
                 return OperationReport(tuple(results))
         artifacts = _artifacts(project, settings, build)
         if operation == "run":
-            executables = [p for p in artifacts if p.suffix.lower() == ".exe"]
-            if len(executables) != 1 or not executables[0].is_file():
-                raise SettingsError("Expected one built executable")
             from .execution import execute
             command, cwd, env = run_command(project, settings, artifacts, nodes)
             return execute([(command, cwd, env)], results, artifacts, wait=settings.run_wait)
@@ -355,23 +400,25 @@ def operate(project, operation):
 
 def clean_target(project, settings, build):
     # Never configure to clean: use only the existing, owned multi-config tree.
-    source, expected_build = _locations(project, settings)
-    marker = build / "cppbuild-owner.json"
-    owner = {"project_root": str(project.root), "source": str(source),
-             "architecture": settings.architecture, "type": settings.project_type.value}
+    # Like CMake's clean target, this removes the configuration's outputs of this tree only;
+    # other Projects are IMPORTED from their own trees and stay untouched.
     try:
+        source, expected_build = _locations(project, settings)
+        toolchain = generators.resolve(settings)
+        marker = build / "cppbuild-owner.json"
         if build != expected_build:
             raise SettingsError("Unexpected clean build directory")
         if not build.exists() or (build.is_dir() and not any(build.iterdir())):
             result = ProcessReport((), 0, f"Nothing to clean: {build}")
         else:
-            if not marker.is_file() or storage.read_json(marker) != owner:
+            if not marker.is_file() or not _owned(project, settings, source, marker):
                 raise SettingsError("Build directory ownership does not match; clean was not run")
-            if not (build / "CMakeCache.txt").is_file() or not (build / f"{_target(project, settings)}.vcxproj").is_file():
+            generated = (build / f"{project.name}{toolchain.solution_suffix}") if toolchain.visual_studio else build / "build.ninja"
+            if not (build / "CMakeCache.txt").is_file() or not generated.is_file():
                 raise SettingsError("Existing build tree is incomplete; clean was not run")
             result = tooling.process(settings, ["cmake", "--build", build, "--config", settings.configuration,
-                            "--target", _target(project, settings), "--", "/t:Clean", "/p:BuildProjectReferences=false"], project.root)
-    except (OSError, SettingsError) as exc:
+                                                "--target", "clean"], project.root)
+    except (OSError, ValueError) as exc:
         result = ProcessReport((), 1, f"Cannot clean {build}: {exc}")
     information.invalidate(project, bump=False)
     try:
@@ -384,22 +431,40 @@ def clean_target(project, settings, build):
     return result
 
 
+def _library_path_variable():
+    if os.name == "nt":
+        return "PATH"
+    return "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+
+
 def runtime_environment(nodes, settings=None):
-    env = tooling.environment(settings.tools) if settings is not None else os.environ.copy()
-    dll_directories = []
+    env = dict(generators.resolve(settings).env) if settings is not None else os.environ.copy()
+    directories = []
     for node in nodes:
         if node.settings.project_type == ProjectType.SHARED_LIBRARY:
             _, build = _locations(node.project, node.settings)
-            dll_directories.extend(str(p.parent) for p in _artifacts(node.project, node.settings, build) if p.suffix.lower() == ".dll")
-    env["PATH"] = os.pathsep.join([*dll_directories, env.get("PATH", "")])
+            directories.append(str(_outputs(node.project, build, node.settings.configuration)["file"].parent))
+    # Windows searches PATH for DLLs; elsewhere the build-tree RPATH is primary and this is a fallback.
+    variable = _library_path_variable()
+    env[variable] = os.pathsep.join(p for p in [*directories, env.get(variable, "")] if p)
     return env
 
 
+def check_runnable(project, settings):
+    _, build = _locations(project, settings)
+    detected = generators.compiler(build)
+    architecture = (detected.architecture if detected else None) or generators.resolve(settings).architecture
+    if not generators.runnable(architecture):
+        raise SettingsError(f"{project.name} is built for {architecture} and cannot run on this host")
+
+
 def run_command(project, settings, artifacts, nodes):
-    executables = [p for p in artifacts if p.suffix.lower() == ".exe"]
-    if len(executables) != 1 or not executables[0].is_file():
+    _, build = _locations(project, settings)
+    executable = _outputs(project, build, settings.configuration)["file"]
+    if not executable.is_file():
         raise SettingsError("Expected one built executable")
-    return [executables[0], *settings.run_arguments], project.root, runtime_environment(nodes, settings)
+    check_runnable(project, settings)
+    return [executable, *settings.run_arguments], project.root, runtime_environment(nodes, settings)
 
 
 def run_artifact(project, settings, artifacts, nodes):

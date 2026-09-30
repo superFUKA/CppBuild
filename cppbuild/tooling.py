@@ -35,7 +35,10 @@ def process(settings, command, cwd, env=None):
     validate(tools)
     command = list(command)
     command[0] = tools.cmake if command[0] == "cmake" else tools.ctest
-    env = environment(tools) if env is None else env
+    if env is None:
+        # Includes a prepared MSVC environment for non-VS generators.
+        from .generators import resolve
+        env = dict(resolve(settings).env)
     executable = shutil.which(command[0], path=env.get("PATH", ""))
     if executable is None:
         raise FileNotFoundError(f"Tool executable not found: {command[0]}")

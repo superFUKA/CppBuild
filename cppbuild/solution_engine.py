@@ -1,20 +1,28 @@
-"""Whole-solution orchestration over independently generated VS projects."""
+"""Whole-solution orchestration over independently generated Project trees.
+
+Visual Studio generators also aggregate the Project files into one solution
+file (.sln builds through MSBuild); other generators and .slnx build the
+dependency closure from Python.
+"""
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from . import engine, storage
-from . import tooling, information
-from .graph import resolve
+from . import tooling, information, generators
+from .graph import compatible, resolve
 from .models import ProjectType, SettingsError
 
 
 def _prepare(solution):
     solution._last_update = None
     solution.settings.reload()
-    roots, nodes = resolve(solution.projects(), include_external_members=solution.settings._data.solution_folders is not None)
+    visual_studio = generators.resolve(solution._build_settings).visual_studio
+    # Unreferenced external members are listed only for the IDE solution view.
+    roots, nodes = resolve(solution.projects(),
+                           include_external_members=visual_studio and solution.settings._data.solution_folders is not None)
     for node in nodes:
-        if (node.settings.architecture, node.settings.configuration) != (solution._build_settings.architecture, solution._build_settings.configuration):
-            raise SettingsError("Whole-solution operations require matching configuration and architecture")
+        if not compatible(node.settings, solution._build_settings):
+            raise SettingsError("Whole-solution operations require matching configuration and generation environment")
         if node.settings.tools != solution._build_settings.tools:
             raise SettingsError("Whole-solution operations require matching ToolSettings; use individual operations for overrides")
     return roots, nodes
@@ -42,7 +50,12 @@ def _generate(solution, nodes, selected):
         processes.append(report.process)
         if not report.success:
             return engine.OperationReport(tuple(processes)), None
-    context = "vs2022-" + solution._build_settings.architecture
+    toolchain = generators.resolve(solution._build_settings)
+    if not toolchain.visual_studio:
+        report = engine.OperationReport(tuple(processes) or (engine.ProcessReport((), 0, "No Projects to generate"),))
+        solution._last_update = report
+        return report, None
+    context = toolchain.context
     source = storage.contained(solution.root, ".cppbuild/generated/" + context)
     build = storage.contained(solution.root, ".cppbuild/build/" + context)
     lines = ["cmake_minimum_required(VERSION 3.24)",
@@ -66,8 +79,8 @@ def _generate(solution, nodes, selected):
     for node in nodes:
         if node.dependencies:
             lines.append(f"add_dependencies({node.label} " + " ".join(d.label for d in node.dependencies) + ")")
-    sln = build / (solution.settings._data.name + ".sln")
-    if selected:
+    sln = build / (solution.settings._data.name + toolchain.solution_suffix)
+    if selected and _msbuild_selection(toolchain):
         # Invoke the .sln, not an external .vcxproj, so MSBuild observes the solution dependency graph.
         target_names = [((folders[n.key].replace("/", "\\") + "\\") if n.key in folders else "") + n.label
                         for n in selected]
@@ -75,7 +88,7 @@ def _generate(solution, nodes, selected):
         targets = ";".join(name.translate(cleanse) for name in target_names).replace("\\", "\\\\")
         lines += ['add_custom_target(cppbuild_selected',
                   '  COMMAND "${CMAKE_VS_MSBUILD_COMMAND}" ' + engine._path(sln),
-                  f'  "/t:{targets}" "/p:Configuration=$<CONFIG>" "/p:Platform={solution._build_settings.architecture}"',
+                  f'  "/t:{targets}" "/p:Configuration=$<CONFIG>" "/p:Platform={toolchain.architecture}"',
                   # Child CMake targets are absent from the aggregate .sln; keep the requested configuration.
                   '  /p:ShouldUnsetParentConfigurationAndPlatform=false',
                   f'  /m:{solution._build_settings.parallel} /verbosity:minimal VERBATIM)']
@@ -92,11 +105,17 @@ def _generate(solution, nodes, selected):
     if not owner_path.exists() and build.exists() and any(build.iterdir()):
         raise SettingsError("Refusing an unowned whole build directory")
     storage.atomic_write(owner_path, storage.encoded(owner))
-    generated = tooling.process(solution._build_settings, ["cmake", "-S", source, "-B", build, "-G", "Visual Studio 17 2022", "-A", solution._build_settings.architecture], solution.root)
+    generated = tooling.process(solution._build_settings, toolchain.configure(source, build), solution.root)
     processes.append(generated)
     report = engine.OperationReport(tuple(processes), (sln,) if generated.success else ())
     solution._last_update = report
     return report, build
+
+
+def _msbuild_selection(toolchain):
+    # .slnx names projects by file name only, so same-named Projects of different kinds
+    # cannot be selected; those solutions are for the IDE and build like other generators.
+    return toolchain.solution_suffix == ".sln"
 
 
 def update(solution):
@@ -136,8 +155,28 @@ def operate(solution, operation):
                 results.append(result)
                 if not result.success:
                     return engine.OperationReport(tuple(results))
-        result = tooling.process(solution._build_settings, ["cmake", "--build", build, "--config", solution._build_settings.configuration, "--target", "cppbuild_selected"], solution.root)
-        results.append(result)
+        if build is not None and _msbuild_selection(generators.resolve(solution._build_settings)):
+            result = tooling.process(solution._build_settings, ["cmake", "--build", build, "--config", solution._build_settings.configuration, "--target", "cppbuild_selected"], solution.root)
+            results.append(result)
+            success = result.success
+        else:
+            # Each tree is built once, dependencies first; the trees are shared with individual builds.
+            closure = set()
+            def include(node):
+                if node.key not in closure:
+                    closure.add(node.key)
+                    for child in node.dependencies:
+                        include(child)
+            for node in selected:
+                include(node)
+            success = True
+            for node in nodes:
+                if node.key in closure:
+                    result = engine.build_node(node)
+                    results.append(result)
+                    if not result.success:
+                        success = False
+                        break
         built_keys = set()
         def capture(node):
             if node.key in built_keys:
@@ -146,10 +185,10 @@ def operate(solution, operation):
             for child in node.dependencies:
                 capture(child)
             _, owned_build = engine._locations(node.project, node.settings)
-            information.built(node.project, node.settings, engine._artifacts(node.project, node.settings, owned_build) if result.success else (), result.success)
+            information.built(node.project, node.settings, engine._artifacts(node.project, node.settings, owned_build) if success else (), success)
         for node in selected:
             capture(node)
-        if not result.success:
+        if not success:
             return engine.OperationReport(tuple(results))
         artifacts, commands = [], []
         for node in selected:

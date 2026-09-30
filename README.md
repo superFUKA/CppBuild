@@ -1,12 +1,13 @@
 # CppBuild
 
-CMakeをラップし、C++のSolution／ProjectをPythonから管理するライブラリです。個別Projectの生成物を全体と共用し、Visual Studio 2022で生成・ビルド・実行・テストを行います。
+CMakeをラップし、C++のSolution／ProjectをPythonから管理するライブラリです。個別Projectの生成物を全体と共用し、選択したCMakeの生成器（Visual Studio 2022／2026、Ninja Multi-Config）とコンパイラで生成・ビルド・実行・テストを行います。
 
 ## 動作環境
 
-- Windows、Python 3.11以上
+- Python 3.11以上
 - CMake／CTest 3.24以上（PATHから利用可能、またはToolSettingsで指定）
-- Visual Studio 2022のC++開発ツールとWindows SDK
+- Windowsの既定：Visual Studio 2022のC++開発ツールとWindows SDK（VS2026やNinja＋MSVCも選択可）
+- Linux/macOSの既定：Ninja Multi-ConfigとC++コンパイラ（GCC/Clang/AppleClang）。実装済み・実環境では未検証
 
 Python実行時の外部パッケージ依存はありません。パッケージのビルドにはsetuptoolsが必要です。
 
@@ -38,8 +39,9 @@ python -m examples.complete_workflow .test-work/workflow
 - 全体.slnのソリューションフォルダー配置、リンク先Solutionの全Project表示
 - GUIDでのProject識別とリンク先の自動登録・共用・未使用参照の自動削除
 - 設定ファイル基準の相対パス保存と旧形式の自動移行
+- 生成器・コンパイラ・アーキテクチャの選択（非保存のCMakeSettings）
 
-対象はVS2022です。他のgeneratorやVS IDEのGUI表示は検証していません。バージョン0.1.0の初期実装であり、制約・検証範囲は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)に記載しています。
+実ビルドで検証済みの生成器は、Windows上のVS2022・VS2026・Ninja Multi-Config（MSVC）です。Linux/macOS、MSVC以外のコンパイラ、VS IDEのGUI表示は検証していません。バージョン0.1.0の初期実装であり、制約・検証範囲は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)に記載しています。
 
 ## 開発と資料
 

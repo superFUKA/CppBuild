@@ -108,8 +108,6 @@ def move_project(solution, name, destination, *, auto_update=True):
 
     if type(auto_update) is not bool:
         raise SettingsError("auto_update must be boolean")
-    if os.name != "nt":
-        raise NotImplementedError("Project relocation currently targets Windows")
     _idle(solution)
     project = solution.get_project(name)
     source = project.root
@@ -172,8 +170,8 @@ def move_project(solution, name, destination, *, auto_update=True):
             for directory in reversed(missing_parents):
                 directory.mkdir()
                 created_parents.append(directory)
-            # Windows rename refuses an existing destination, including a race.
-            source.rename(destination)
+            # Refuses an existing destination, including a race.
+            storage.rename_no_replace(source, destination)
             location[0] = destination
             for member, shadow, data, build, documents in prepared:
                 if member is not project and data == member.settings._data:
@@ -194,10 +192,10 @@ def move_project(solution, name, destination, *, auto_update=True):
                     elif not path.exists() or path.read_bytes() != previous:
                         storage.atomic_write(path, previous)
                 if location[0] == destination:
-                    destination.rename(source)
+                    storage.rename_no_replace(destination, source)
                     location[0] = source
                 for old, saved in reversed(caches):
-                    saved.rename(old)
+                    storage.rename_no_replace(saved, old)
                 for directory in reversed(created_parents):
                     directory.rmdir()
                 if backup.exists():

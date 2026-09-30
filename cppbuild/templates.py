@@ -184,7 +184,7 @@ def _snapshot(solution, destination, name, *, template):
             for path, content in shadow.settings._documents(data).items():
                 storage.atomic_write(stage / path.relative_to(destination), content)
         storage.atomic_write(clone.settings.path, final_owner.settings._document(final_values))
-        stage.rename(destination)
+        storage.rename_no_replace(stage, destination)
     return destination
 
 

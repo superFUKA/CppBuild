@@ -1,6 +1,6 @@
 # ライブラリを実際に使うテスト用プロジェクト
 
-`run.py` が公開APIを使って複数のSolutionとC++ソースを作成し、VS2022で生成・コンパイル・リンク・実行・CTestまで行います。モックや既存の単体テストの呼び出しは使いません。ソース・管理設定・Visual Studio生成物・実行ログは削除せず残すため、実行後にプロジェクトを開いて変更できます。
+`run.py` が公開APIを使って複数のSolutionとC++ソースを作成し、選択した生成器（既定はVS2022）で生成・コンパイル・リンク・実行・CTestまで行います。モックや既存の単体テストの呼び出しは使いません。ソース・管理設定・CMake／Visual Studio生成物・実行ログは削除せず残すため、実行後にプロジェクトを開いて変更できます。
 
 今回の検証結果と生成先は[RESULTS.md](RESULTS.md)を参照してください。
 
@@ -20,7 +20,14 @@ python -m usage_tests.run --scenario lifecycle --scenario libraries
 
 # 保存先を明示（存在しないディレクトリを指定）
 python -m usage_tests.run --scenario external --output .test-work/my-external-check
+
+# 生成器・アーキテクチャ・ツールセットを切り替えて同じシナリオを実行（2026-09-30追加）
+python -m usage_tests.run --online --generator "Ninja Multi-Config"
+python -m usage_tests.run --online --generator "Visual Studio 18 2026"
+python -m usage_tests.run --scenario lifecycle --generator "Ninja Multi-Config" --architecture Win32 --toolset 14.44
 ```
+
+`--generator` を省略すると、OSごとの既定（Windowsでは `Visual Studio 17 2022`）を使う。指定はすべてのシナリオのSolution設定に適用され、テンプレートから復元したSolutionにも再指定する。シナリオのC++ソースは `__declspec` 等のWindows向け記述を含むため、Linux/macOSでそのまま実行することは想定していない。
 
 既定の出力先は`.test-work/usage-日時/`です。同じ保存先の上書き・削除は行いません。再実行では新しい保存先を使ってください。`testing`を含む場合、ZIPか`--online`の指定が必須で、未指定のままテストを省略して成功にはしません。
 
@@ -44,7 +51,7 @@ python -m usage_tests.run --scenario external --output .test-work/my-external-ch
 
 コンパイルエラー、終了コード7、GoogleTestの失敗・0件は意図的に発生させるケースです。それらが正しく失敗として返されることを確認できればシナリオはPASSになります。最後の終了コードは全シナリオ成功なら0、予期しない失敗があれば1です。一つのシナリオが失敗しても残りは実行します。
 
-これは主要機能を組み合わせた利用検証で、あらゆる入力の網羅ではありません。既定アーキテクチャはx64です。x86/ARM64、VS IDEのGUI操作、ネットワーク障害、全例外パターンはこのシナリオ集の検証対象外です。
+これは主要機能を組み合わせた利用検証で、あらゆる入力の網羅ではありません。既定アーキテクチャはホストの既定（x64）です。全シナリオでのx86/ARM64、VS IDEのGUI操作、ネットワーク障害、全例外パターンはこのシナリオ集の検証対象外です。
 
 ## 生成したプロジェクトを続けて使う
 

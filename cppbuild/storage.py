@@ -45,6 +45,49 @@ def atomic_write(path, data):
         Path(temporary).unlink(missing_ok=True)
 
 
+def rename_no_replace(source, destination):
+    """Rename without replacing an existing destination, including one created concurrently."""
+    source, destination = Path(source), Path(destination)
+    if os.name == "nt":
+        # Windows rename refuses any existing destination, so retrying cannot overwrite.
+        # Scanners/indexers briefly hold new files open (WinError 5/32); wait for them.
+        import time
+        for attempt in range(40):
+            try:
+                source.rename(destination)
+                return
+            except PermissionError:
+                if attempt == 39 or not source.exists() or destination.exists():
+                    raise
+                time.sleep(0.25)
+        return
+    if source.is_dir() and not source.is_symlink():
+        # POSIX rename replaces an empty directory, so claim the name exclusively first.
+        # Content written there meanwhile makes the rename fail instead of being replaced.
+        os.mkdir(destination)
+        try:
+            os.rename(source, destination)
+        except BaseException:
+            try:
+                os.rmdir(destination)
+            except OSError:
+                pass
+            raise
+        return
+    try:
+        # link() never replaces an existing name.
+        os.link(source, destination, follow_symlinks=False)
+    except FileExistsError:
+        raise
+    except OSError:
+        # Filesystems without hard links: exclusive create, copy, then remove the source.
+        import shutil
+        with open(source, "rb") as reader, open(destination, "xb") as writer:
+            shutil.copyfileobj(reader, writer)
+        shutil.copystat(source, destination)
+    os.unlink(source)
+
+
 def publish_documents(documents):
     """Restore published documents on failure; callers hold all writer locks."""
     written = []

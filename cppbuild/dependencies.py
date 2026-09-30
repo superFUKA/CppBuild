@@ -133,13 +133,16 @@ def cmake(project, settings, key, value, target, scope):
                 if config == settings.configuration and not location.is_file():
                     raise SettingsError(f"Imported artifact does not exist: {location}")
                 lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_LOCATION_{config.upper()} {_path(location)})")
-                if kind == ProjectType.SHARED_LIBRARY:
-                    if settings.configuration not in value.import_libraries:
-                        raise SettingsError("A Windows shared library requires its import library")
+                if kind == ProjectType.SHARED_LIBRARY and value.import_libraries:
                     implib = path(project, value.import_libraries[config]) if config in value.import_libraries else project.root / ".cppbuild/missing" / (config + ".lib")
                     if config == settings.configuration and not implib.is_file():
                         raise SettingsError(f"Import library does not exist: {implib}")
                     lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_IMPLIB_{config.upper()} {_path(implib)})")
+            if kind == ProjectType.SHARED_LIBRARY and settings.configuration not in value.import_libraries:
+                # Only DLL platforms (MSVC, MinGW) link through an import library.
+                lines += ["if(CMAKE_IMPORT_LIBRARY_SUFFIX)",
+                          f"  message(FATAL_ERROR {_quote('Shared library ' + key + ' requires its import library on this platform')})",
+                          "endif()"]
         for directory in value.include_directories:
             lines.append(f"target_include_directories({alias} INTERFACE {_path(path(project, directory))})")
     else:

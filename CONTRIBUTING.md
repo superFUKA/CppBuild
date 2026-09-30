@@ -13,6 +13,8 @@ python -m venv .venv
 ```powershell
 $env:CPPBUILD_TEST_VS2022 = '1'
 $env:CPPBUILD_TEST_GTEST_ARCHIVE = 'C:/archives/v1.14.0.zip'
+$env:CPPBUILD_TEST_NINJA = '1'    # Ninja Multi-Config（WindowsではMSVCをvcvarsallで自動準備）
+$env:CPPBUILD_TEST_VS2026 = '1'   # Visual Studio 18 2026（.slnx）
 .venv/Scripts/python -m unittest discover -s tests -v
 ```
 

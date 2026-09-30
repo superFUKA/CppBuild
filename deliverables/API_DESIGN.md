@@ -285,4 +285,18 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 
 ## 2026-09-30追加：設定ファイル基準の相対パス
 
-現行の管理JSONはschema_version=4。バージョン2の相対パス形式を維持し、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。
+現行の管理JSONはschema_version=4（生成器切り替えでは変更なし）。バージョン2の相対パス形式を維持し、所属Project・共有素材・ソース・PCH・includeディレクトリ・種類別ファイル・外部Solution・CMakeソース／パッケージ・ImportedLibraryの型付きパスを各ファイル基準で相対保存する。絶対パス入力も保存時に相対化する。別ドライブ／別共有など相対化不能な指定はSettingsError。旧schema_version=1は元の配置でopen/reloadすると自動移行する。移設時には利用側と参照先の相対配置を維持し、環境依存の生成物・CMakeキャッシュを再生成する。
+
+## 2026-09-30追加：生成器・コンパイラの切り替え
+
+ユーザー合意：VS固有の操作以外をWindows限定にしない。生成器の省略時はOSごとの固定値。本ライブラリがVSを前提にしていた箇所はすべて修正対象。cleanはNinjaの挙動（CMake標準のclean）へ統一。検証は手元の環境で行う（GitHub Actionsは当面なし）。
+
+- 非保存のビルド設定 `CMakeSettings(generator=None, toolset=None, c_compiler=None, cxx_compiler=None, toolchain_file=None)` を追加。`SolutionBuildSettings.cmake` の既定は `CMakeSettings()`、`ProjectBuildSettings.cmake` の既定は `INHERIT`（オブジェクト単位で継承）。管理JSONへは保存しない。
+- `generator=None` は、Windowsでは `Visual Studio 17 2022`、その他では `Ninja Multi-Config`。対応は `Visual Studio 17 2022`／`Visual Studio 18 2026`／`Ninja Multi-Config` で、他はSettingsError。
+- VSでは `c_compiler`/`cxx_compiler` を指定不可。`toolchain_file` は絶対パスで、コンパイラ指定とは排他。コンパイラは名前か絶対パス。`toolset` はVSでは `-T`、Ninja＋MSVCではMSVCのバージョン（vcvarsallの `-vcvars_ver`）。
+- `architecture` の既定は `"x64"` から `None`（ホスト／コンパイラの既定）に変更。値は `None`/`x64`/`Win32`/`ARM64` で、全生成器で有効。Windows＋Ninja＋MSVCでは、vswhere／vcvarsallで対象のMSVC環境を用意する。
+- `UpdateReport` に `generator` と `compiler`（`CompilerInfo`：id/version/path/architecture）を末尾に追加。VS以外ではsolution_file/project_file/filters_fileはNone。VS2026のsolution_fileは.slnx。全体updateのartifactsは、VSでは全体のソリューションファイル、それ以外では空。
+- `EnvironmentOptions.cmake` を追加し、`EnvironmentOptions.architecture` の既定を `None` に変更。`EnvironmentReport` は解決後のarchitectureと `generator` を返す。診断項目名は、既定のVS2022では従来の `vs2022`、それ以外では `compiler`。`Environment.generators(tools=None)` はCMakeの生成器ごとに `GeneratorInfo(name, platform_support, toolset_support, supported)` を返す。
+- cleanは全生成器で、所有ツリーに対して `cmake --build --config <構成> --target clean` を実行する。ツリー内部のGoogleTest・CMakeSourceも削除対象になる。事前の構成禁止と共有依存の保護は維持する。
+- 依存先の成果物は、生成するCMakeListsが出力する `cppbuild-outputs-<構成>.txt`（TARGET_FILE／TARGET_LINKER_FILE）で特定する。拡張子で判定しない。
+- 詳細・制約は [利用手順](USAGE.md) の「生成器・コンパイラの切り替え」、検証状況は [実装記録](IMPLEMENTATION_STATUS.md) を参照。

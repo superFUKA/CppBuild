@@ -5,9 +5,10 @@ from .execution import RunReport
 from .testing import TestReport, TestCaseResult
 from .templates import TemplateTools
 from .events import Event, EventCallbackError
-from .environment import Environment, EnvironmentOptions, EnvironmentReport, EnvironmentItem
+from .environment import Environment, EnvironmentOptions, EnvironmentReport, EnvironmentItem, GeneratorInfo
+from .generators import CompilerInfo
 from .information import ProjectInfo, SolutionInfo
-from .models import ToolSettings, SolutionFolderSettings
+from .models import ToolSettings, SolutionFolderSettings, CMakeSettings
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
@@ -24,4 +25,5 @@ __all__ = [
     "RunReport", "TestReport", "TestCaseResult",
     "TemplateTools", "Event", "EventCallbackError", "Environment", "EnvironmentOptions",
     "EnvironmentReport", "EnvironmentItem", "ToolSettings", "ProjectInfo", "SolutionInfo",
+    "CMakeSettings", "GeneratorInfo", "CompilerInfo",
 ]

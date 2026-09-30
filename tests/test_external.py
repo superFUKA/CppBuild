@@ -62,9 +62,11 @@ class ExternalTests(unittest.TestCase):
         pch = list((app.root / ".cppbuild/build").rglob("*.pch"))
         self.assertTrue(pch)
         binary = next((app.root / ".cppbuild/build").rglob("External.lib"))
-        original = binary.read_bytes()
+        self.assertTrue(binary.is_file())
+        # CMake's clean covers the whole owned tree, including its private external sources.
         self.success(app.clean())
-        self.assertEqual(binary.read_bytes(), original)
+        self.assertFalse(binary.exists())
+        self.assertTrue((source / "external.cpp").is_file())
         app.settings.clear_pch()
         self.success(app.rebuild())
         self.assertTrue((app.root / "include/pch.hpp").is_file())

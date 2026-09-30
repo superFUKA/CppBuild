@@ -20,11 +20,9 @@ class CleanTests(unittest.TestCase):
     def owned_tree(self, project):
         settings = project._resolved_build_settings()
         source, build = engine._locations(project, settings)
-        storage.atomic_write(build / "cppbuild-owner.json", storage.encoded({
-            "project_root": str(project.root), "source": str(source),
-            "architecture": settings.architecture, "type": settings.project_type.value}))
+        storage.atomic_write(build / "cppbuild-owner.json", storage.encoded(engine._owner(project, settings, source)))
         (build / "CMakeCache.txt").write_text("test cache")
-        (build / f"{engine._target(project, settings)}.vcxproj").write_text("test project")
+        (build / f"{project.name}.sln").write_text("test solution")
         return build
 
     def success(self, report):
@@ -49,7 +47,7 @@ class CleanTests(unittest.TestCase):
 
     def test_unowned_or_incomplete_tree_fails_without_modification(self):
         build = self.owned_tree(self.app)
-        for filename in ("App.vcxproj", "CMakeCache.txt", "cppbuild-owner.json"):
+        for filename in ("App.sln", "CMakeCache.txt", "cppbuild-owner.json"):
             with self.subTest(filename=filename):
                 path = build / filename
                 original = path.read_bytes()
@@ -84,8 +82,7 @@ class CleanTests(unittest.TestCase):
                 generate.assert_not_called()
                 self.assertEqual(process.call_count, 1)
                 command = process.call_args.args[1]
-                self.assertIn("/t:Clean", command)
-                self.assertIn("/p:BuildProjectReferences=false", command)
+                self.assertEqual(command[command.index("--target") + 1], "clean")
                 self.assertNotIn("-S", command)
 
     def test_shared_transitive_dependency_is_preserved(self):

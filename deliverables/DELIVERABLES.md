@@ -10,6 +10,10 @@
 
 実装開始後の追加資料：
 
+- [CROSS_PLATFORM_PLAN.md](CROSS_PLATFORM_PLAN.md)：次の開発テーマ。生成器・コンパイラ切り替えのAPI案、判断事項、実装順序、完了条件。
+
+- [CROSS_PLATFORM_REVIEW.md](CROSS_PLATFORM_REVIEW.md)：Windows依存の調査と非Windows対応の方針案。未実装・他OS未検証。
+
 - [USAGE.md](USAGE.md)：GoogleTestのオンライン／オフライン導入、統合利用例、テスト実行手順。
 
 - [MILESTONES.md](MILESTONES.md)：段階別のAcceptance Criteriaと完了状態。

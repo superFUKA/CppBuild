@@ -5,6 +5,12 @@ import hashlib
 from .models import Dependency, SettingsError
 
 
+def compatible(first, second):
+    """Linked trees need one configuration and one generator/compiler/architecture."""
+    from .generators import resolve
+    return first.configuration == second.configuration and resolve(first) == resolve(second)
+
+
 @dataclass
 class Node:
     project: object
@@ -85,8 +91,8 @@ def resolve(projects, *, include_external_members=False):
             child = visit(other, reference.project_type)
             if any(d.project.root == child.project.root and d.settings.project_type != child.settings.project_type for d in node.dependencies):
                 raise SettingsError("One consumer cannot link multiple kinds of the same Project")
-            if (settings.configuration, settings.architecture) != (child.settings.configuration, child.settings.architecture):
-                raise SettingsError(f"Incompatible configuration/architecture: {project.name} -> {other.name}")
+            if not compatible(settings, child.settings):
+                raise SettingsError(f"Incompatible configuration or generation environment: {project.name} -> {other.name}")
             if child not in node.dependencies:
                 node.dependencies.append(child)
         visiting.remove(key)
