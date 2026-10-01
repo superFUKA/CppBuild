@@ -135,6 +135,8 @@ class ProjectBuildSettings:
     googletest_archive: str | None = None
     tools: ToolSettings | Inheritance = INHERIT
     cmake: CMakeSettings | Inheritance = INHERIT
+    intermediate_directory: str = "output/intermediate"
+    artifact_directory: str = "output/artifacts"
 
 
 @dataclass
@@ -155,6 +157,7 @@ class SolutionBuildSettings:
     cmake: CMakeSettings = field(default_factory=CMakeSettings)
     # Project GUID -> STATIC_LIBRARY/SHARED_LIBRARY, overriding saved link types in this operation.
     project_types: dict[str, ProjectType] = field(default_factory=dict)
+    intermediate_directory: str = "output/intermediate"
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,52 @@
 # 利用手順
 
+<a id="output-directories"></a>
+
+## 出力先の指定（2026-10-01追加）
+
+```python
+from cppbuild import ProjectBuildSettings, SolutionBuildSettings
+
+project.set_build_settings(ProjectBuildSettings(
+    intermediate_directory="output/intermediate",
+    artifact_directory="D:/CppBuild/products",
+))
+solution.set_build_settings(SolutionBuildSettings(
+    intermediate_directory="output/intermediate",
+))
+```
+
+- Projectの既定値は`output/intermediate`と`output/artifacts`。相対パスはそのProjectの`.cppbuild`基準。`../work`ならProject直下の`work`となる。絶対パスも使用できる。
+- Solutionの指定は全体.sln／.slnxなどの生成領域だけに適用する。Projectへの出力先の継承・一括指定はない。Ninjaでは全体IDEファイルを生成しない。
+- どちらも非保存で、再open後は既定値に戻る。set_build_settingsは設定全体の置き換えなので、他の指定も必要に応じて渡す。
+- 指定先の直下に直接ファイルを書かず、所有者・所在・生成環境・種類から求めた10桁の識別子の配下へ配置する。中間領域は成果物の出力先も識別に含める。同じ絶対パス、同じ名前、同じGUIDの別コピーでも領域を分ける。所有マーカーの不一致や、マーカーのない既存領域への上書きは拒否する。
+
+既定の配置は次のとおり。識別子はライブラリの内部管理用で、利用コードから組み立てない。
+
+```text
+Solution/.cppbuild/output/intermediate/<id>/
+  source/CMakeLists.txt
+  Solution.sln                       # VS2026は.slnx
+Project/.cppbuild/output/intermediate/<id>/
+  source/CMakeLists.txt
+  Project.sln                        # 個別IDEファイル、キャッシュ、obj等もこの領域
+Project/.cppbuild/output/artifacts/<id>/
+  Debug/                            # exe、lib、dll、リンク用PDB等
+  Release/
+```
+
+全体／個別ビルドはProjectの同じ領域を使う。Debug／Releaseは同じCMakeキャッシュを共用し、生成環境とライブラリ形式は別領域となる。PCH・コンパイル用PDBの詳細配置はCMake標準に従う。MSVCの静的ライブラリではデバッグに必要なコンパイルPDBも成果物側へ出る。GoogleTestやCMakeSourceの内部ターゲットは従来どおりビルド領域に置き、公開Projectの最終ターゲットだけをartifact_directoryへ出す。
+
+管理Project間の依存はGUIDで解決し、設定先のライブラリを先にビルドしてリンクする。成果物は操作結果の`artifacts`、IDEファイルはProject.updateの`solution_file`／`project_file`等から取得できる。
+
+外部Solutionは従来どおり依存操作の中で再openするため、別途開いた外部Projectインスタンスの非保存設定は引き継がない。外部Projectの出力先は既定値となる。既存のexternal_build_settingsはSolutionの設定を上書きするもので、Projectの出力先の指定には使わない。
+
+出力先を変えても旧生成物は削除しない。成果物の設定だけを変えた場合も、別の中間ツリーを選ぶ。同じツリーのOutDirを変更するとMSBuildが旧成果物を消す場合があるため。cleanは現在の設定で選ばれた既存の所有CMakeツリーを対象とし、事前生成やルート全体の削除は行わない。未生成の設定なら対象なしで成功する。旧領域をcleanする場合は元の設定へ戻して呼び出す。CMakeがclean対象にしないPDB・ILK等は残る場合がある。
+
+出力領域の所有マーカーがあるディレクトリは、ソース走査とテンプレートから除外する。Project移動では相対パスを補正し、外部出力先の位置を維持する。所在が変わると識別子も変わり、旧キャッシュは再利用しない。旧出力領域は残す。旧仕様の`.cppbuild/generated`と`.cppbuild/build`は既存の移動処理で退避する。
+
+WindowsではCMake内部にも長いパスができるため、深いソース配置では短い絶対出力先を指定する。内部識別子を短くしても、OS・コンパイラのパス長制限そのものはなくならない。
+
 Windows、Python 3.11以上、Visual Studio 2022のC++ツールとWindows SDK、CMake/CTest 3.24以上を前提とする。実検証した環境は[実装記録](IMPLEMENTATION_STATUS.md)を参照。
 
 リポジトリのルートで実行する。作成先には新しいディレクトリを指定する。
@@ -159,7 +206,7 @@ Workspace/
 Workspace全体を別の場所へ移してから `Solution.open(new_workspace / "Consumer/.cppbuild")` すれば、移設先のProviderを参照する。ソース、include、PCH、共有素材、CMakeソース／パッケージ、ImportedLibraryのDLL・LIB・includeも同じ方式で保存する。利用側と依存先の相対配置を維持すること。
 
 - 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=4へ自動移行してから移す。初回は設定の書き込み権限が必要。
-- `.cppbuild/build`・`.cppbuild/generated` の既存CMakeキャッシュや生成物は移設先へ持ち込まず、移設先でupdate/buildして再生成する。テンプレート機能はこれらを除外する。
+- 既存CMakeキャッシュは移設先で再利用せず、update/buildして再生成する。新配置では所在を含む識別子が変わるため旧領域を参照しない。テンプレート機能は出力領域を除外する。旧配置の`.cppbuild/build`・`.cppbuild/generated`も除外対象。
 - ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
 - 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。
 
@@ -245,7 +292,7 @@ report = Environment.check(EnvironmentOptions(cmake=CMakeSettings(generator="Nin
 - 共有ライブラリの実行時探索：WindowsはPATHに依存先の.dllの場所を追加する。Linux/macOSはCMakeがビルドツリーに設定するRPATHを使い、補助として `LD_LIBRARY_PATH`／`DYLD_LIBRARY_PATH` も設定する。
 - `ImportedLibrary` の共有ライブラリのインポートライブラリは、インポートライブラリを使う対象（MSVC・MinGW）でだけ必須。
 - WindowsのNinja＋MSVCでは、パスに非ASCII文字（日本語等）があると、ヘッダー依存を追跡できない。MSVCの `/showIncludes` が出力するパスはコンソールのコードページで、Ninja 1.13はUTF-8として比較するため。この場合、ビルドは正しく完了するが、毎回再コンパイル・再リンクされる（差分ビルドにならない）。ASCIIパスでは差分ビルドになることを確認済み。VSの生成器にはこの制約はない。
-- ツールチェーンファイルの内容の変更や、コンパイラ無指定時の環境変数以外の変化は検出しない。この場合は `.cppbuild/build` の該当ツリーを利用者が削除する。
+- ツールチェーンファイルの内容の変更や、コンパイラ無指定時の環境変数以外の変化は検出しない。この場合はProjectのintermediate_directoryを別の場所へ変更して再構成するか、UpdateReport.build_directoryで示される該当ツリーを利用者が削除する。
 - ファイル・Projectの移動とテンプレート展開は、Linux/macOSでも既存の宛先を上書きしない。ディレクトリは宛先を排他作成してからrename、ファイルはハードリンクしてから元を削除する（ハードリンク非対応なら排他作成してコピー）。
 
 # 依存探索ディレクトリとリンク形式の切り替え（2026-10-01追加）

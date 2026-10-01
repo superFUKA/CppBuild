@@ -59,6 +59,9 @@ def _settings(project, after, source, destination):
     build = deepcopy(project._build_settings)
     if build.googletest_archive is not None:
         build.googletest_archive = path(build.googletest_archive)
+    for field in ("intermediate_directory", "artifact_directory"):
+        setattr(build, field, _rebase(getattr(build, field), project.root / ".cppbuild",
+                                    after / ".cppbuild", source, destination))
     _tools(build.tools, source, destination)
     return values, build
 
@@ -97,6 +100,8 @@ def _idle(solution):
         if last and isinstance(last[1], RunReport) and not last[1].done:
             raise SettingsError("Wait for running applications before moving a Project")
     for project in solution.projects():
+        if (project.root / ".cppbuild/operations/.write.lock").exists():
+            raise SettingsError("Wait for Project operations before moving a Project")
         if any((project.root / ".cppbuild/generated").rglob(".write.lock")):
             raise SettingsError("Wait for Project operations before moving a Project")
 

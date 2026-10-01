@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 
+from cppbuild import engine
 from cppbuild import (Solution, ProjectType as T, ProjectSettingsData, TypeSettingsData,
                       ProjectBuildSettings, SolutionBuildSettings, CMakePackage, CMakeSource,
                       ImportedLibrary)
@@ -31,7 +32,7 @@ class ExternalTests(unittest.TestCase):
         consumer.set_build_settings(SolutionBuildSettings(configuration="Release", external_build_settings={
             str(provider.root / ".cppbuild"): SolutionBuildSettings(configuration="Release")}))
         self.success(app.run())
-        binary = next((lib.root / ".cppbuild/build").rglob("Debug/Lib.lib"))
+        binary = next((lib.root / ".cppbuild/output").rglob("Debug/Lib.lib"))
         original = binary.read_bytes()
         reopened = Solution.open(consumer.root / ".cppbuild").get_project("App")
         reopened.settings.unlink(linked.dependency_id)
@@ -60,9 +61,9 @@ class ExternalTests(unittest.TestCase):
         b = app.settings.link_package(CMakePackage("DemoPackage", "DemoPackage::Headers", str(package)))
         app.settings.set_pch(project_headers=["include/pch.hpp"], system_headers=["string"])
         self.success(app.run())
-        pch = list((app.root / ".cppbuild/build").rglob("*.pch"))
+        pch = list((app.root / ".cppbuild/output").rglob("*.pch"))
         self.assertTrue(pch)
-        binary = next((app.root / ".cppbuild/build").rglob("External.lib"))
+        binary = next((app.root / ".cppbuild/output").rglob("External.lib"))
         self.assertTrue(binary.is_file())
         # CMake's clean covers the whole owned tree, including its private external sources.
         self.success(app.clean())
@@ -93,10 +94,12 @@ class ExternalTests(unittest.TestCase):
             apps.append(name)
         solution.set_build_settings(SolutionBuildSettings(build_projects=apps, run_projects=apps))
         self.success(solution.run())
-        self.assertTrue(list((lib.root / ".cppbuild/build/vs2022-x64-static_library").rglob("Lib.lib")))
-        self.assertTrue(list((lib.root / ".cppbuild/build/vs2022-x64-shared_library").rglob("Lib.dll")))
+        self.assertTrue(list((lib.root / ".cppbuild/output/artifacts").rglob("Lib.lib")))
+        self.assertTrue(list(engine._artifact_directory(lib, lib._resolved_build_settings(T.SHARED_LIBRARY)).rglob("Lib.dll")))
         # An explicit static/shared selection on the provider unifies every such link in the build.
-        shutil.rmtree(lib.root / ".cppbuild/build/vs2022-x64-shared_library")
+        shared_output = engine._artifact_directory(lib, lib._resolved_build_settings(T.SHARED_LIBRARY))
+        self.assertTrue(shared_output.is_relative_to(self.root))
+        shutil.rmtree(shared_output)
         lib.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
         self.success(solution.run())
-        self.assertFalse((lib.root / ".cppbuild/build/vs2022-x64-shared_library").exists())
+        self.assertFalse(shared_output.exists())

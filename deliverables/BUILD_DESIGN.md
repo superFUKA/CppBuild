@@ -57,18 +57,23 @@ target_sourcesでtargetの一覧を定義し、Projectごとに分けたCMakeデ
 
 ## 2. CMake入力とディレクトリ
 
-以下は配置例。パス名は提案であり、利用側が手書きするものではない。
+2026-10-01更新：Projectごとに非保存のintermediate_directoryとartifact_directoryを指定する。Solutionは自身のintermediate_directoryだけを持ち、Projectへ継承しない。相対パスはそれぞれ自身の.cppbuild基準で、絶対パスにも対応する。
 
 ```text
 Demo/
   .cppbuild/
-    solution.json                 # 所属参照・主Project・共有素材等の管理設定
+    project.json                  # Solutionの管理設定（配置は維持）
     templates/
-    generated/<context>/          # 全体用CMake入口・依存定義
+    output/intermediate/<id>/
+      source/CMakeLists.txt       # 全体用入口
+      Demo.sln                    # VS2026は.slnx
   App/
     .cppbuild/
       project.json                # ソース範囲・種類・依存・詳細設定
-      generated/<context>/        # 個別用CMake入口・依存定義
+      output/intermediate/<id>/
+        source/CMakeLists.txt     # 個別入口
+        App.sln                   # IDEファイル、キャッシュ、中間ファイルもこの領域
+      output/artifacts/<id>/<config>/  # 公開ターゲットの成果物
     src/
   Math/
     .cppbuild/project.json
@@ -76,12 +81,13 @@ Demo/
   Tool/
     .cppbuild/project.json
     src/
-  build/
-    solution/<context>/Demo.sln
-    projects/<project-id>/<context>/App.sln
 ```
 
-個別入力は対象Project配下に置く一方、生成物は所有範囲を分けた専用build配下に置く。外部Projectも元ソースへビルド生成物を書き込まず、呼び出した生成範囲のツリーに置く案。設定・ソース・生成CMake・ビルド出力を混同しない。
+idは所在・GUID・生成環境・種類から求める10桁のハッシュ。中間領域は成果物の出力先も識別に含め、OutDir変更によるMSBuildの旧成果物削除を防ぐ。Windowsのパス長制限を考慮し、識別子のディレクトリ自体を-Bのビルド領域、そのsourceサブディレクトリを-Sの入力領域とする。所有マーカーを照合し、別Projectやコピーによる上書きを防ぐ。全体／個別で同じProjectの領域を使い、外部Projectは所属先の領域を使う。
+
+CMakeへ-Sと-Bを渡し、公開ターゲットのRUNTIME/LIBRARY/ARCHIVE/PDB出力プロパティを構成別に設定する。コンパイル用PDB・PCHはCMake標準配置とし、MSVC静的ライブラリのコンパイルPDBが成果物側へ出ることもある。外部CMakeソース・GoogleTestの内部生成物はビルド領域を使う。依存リンク・実行は構成別出力メタデータ、成果物の報告はFile APIから取得し、指定した成果物領域内であることを確認する。
+
+出力先変更時に旧領域を自動削除しない。cleanは現在の設定で選ばれる既存ツリーを使い、未生成なら対象なしで成功する。Project移動は外部出力先への相対パスを補正し、所在を含む識別子を変えて古いキャッシュの再利用を防ぐ。旧出力領域は残す。旧配置generated/buildの退避は維持する。
 
 走査では管理用.cppbuildと生成物の所有ディレクトリをソース対象から除外する。対象Project配下にビルド先を指定しても生成物を再帰的に取り込まない。外部ソースのフィルター基準はルートごとに定め、複数ルートの名前衝突は診断する案。
 

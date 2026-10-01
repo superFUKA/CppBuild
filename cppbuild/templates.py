@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 
-from . import storage
+from . import storage, output_paths
 from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, SettingsError
 
 
@@ -83,6 +83,7 @@ def _copy_tree(source, destination, *, exclude=True, skip=()):
     for current, directories, files in os.walk(source, followlinks=False, onerror=inaccessible):
         relative = Path(current).relative_to(source)
         directories[:] = [d for d in directories if (not exclude or d not in EXCLUDED)
+                          and (not exclude or not output_paths.generated_directory(Path(current) / d))
                           and (Path(current) / d).resolve() not in skip]
         for name in [*directories, *files]:
             path = Path(current) / name

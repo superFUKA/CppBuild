@@ -8,7 +8,7 @@ import sys
 
 from .models import ProjectType, SettingsError
 from . import storage
-from . import tooling, information, generators
+from . import tooling, information, generators, output_paths
 
 CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 
@@ -93,6 +93,8 @@ def _scan(project):
     excluded = {".cppbuild", ".git", "build", "__pycache__", ".cache", ".venv"}
     for directory in project.settings._data.source_directories:
         root = storage.contained(project.root, directory)
+        if any(output_paths.generated_directory(p) for p in (root, *root.parents)):
+            raise SettingsError(f"Generated directory cannot be a source root: {directory}")
         if any(part in excluded for part in root.relative_to(project.root).parts):
             raise SettingsError(f"Excluded directory cannot be a source root: {directory}")
         if not root.exists():
@@ -101,6 +103,7 @@ def _scan(project):
             raise SettingsError(f"Source directory is not a directory: {root}")
         for current, directories, names in os.walk(root, followlinks=False):
             directories[:] = sorted(d for d in directories if d not in excluded
+                                    and not output_paths.generated_directory(Path(current) / d)
                                     and not _directory_link(Path(current) / d))
             for name in names:
                 path = Path(current) / name
@@ -117,11 +120,23 @@ def _directory_link(path):
 def _locations(project, settings):
     # Debug/Release intentionally share a multi-config cache. Generator, compiler,
     # architecture and kind do not.
-    context = f"{generators.resolve(settings).context}-{settings.project_type.value}"
-    base = storage.contained(project.root, ".cppbuild")
-    source = storage.contained(base, f"generated/{context}")
-    build = storage.contained(base, f"build/{context}")
+    context = _intermediate_context(project, settings)
+    base = output_paths.area(project, settings.intermediate_directory, context)
+    source = storage.contained(base, "source")
+    build = base
     return source, build
+
+
+def _intermediate_context(project, settings):
+    # MSBuild can remove previous outputs when OutDir changes in one tree.
+    # Keep a separate tree for each artifact root so changing it preserves files.
+    return (f"{generators.resolve(settings).context}-{settings.project_type.value}"
+            f"|artifacts={output_paths.root(project, settings.artifact_directory)}")
+
+
+def _artifact_directory(project, settings):
+    context = f"{generators.resolve(settings).context}-{settings.project_type.value}"
+    return output_paths.area(project, settings.artifact_directory, context)
 
 
 def _cmake(project, settings, files, dependencies=()):
@@ -154,6 +169,10 @@ def _cmake(project, settings, files, dependencies=()):
         declaration = f"add_executable({name})" if kind in {ProjectType.EXECUTABLE, ProjectType.TEST} else f"add_library({name} {'STATIC' if kind == ProjectType.STATIC_LIBRARY else 'SHARED'})"
         lines += [declaration, f"target_sources({name} PRIVATE\n  {listed}\n)",
                   f"set_target_properties({name} PROPERTIES CXX_STANDARD {settings.cpp_standard} CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)"]
+        artifacts = _artifact_directory(project, settings)
+        for configuration in CONFIGURATIONS:
+            for category in ("RUNTIME", "LIBRARY", "ARCHIVE", "PDB"):
+                lines.append(f"set_property(TARGET {name} PROPERTY {category}_OUTPUT_DIRECTORY_{configuration.upper()} {_path(artifacts / configuration)})")
         display_only = [p for p in files if p.suffix.lower() not in {".cpp", ".cc", ".cxx"}]
         if display_only:
             lines += ["set_source_files_properties(" + " ".join(_path(p) for p in display_only) + " PROPERTIES HEADER_FILE_ONLY TRUE)"]
@@ -278,13 +297,16 @@ def _owned(project, settings, source, marker):
 def _generate(project, settings, source, build, dependencies=()):
     project._last_update = None
     toolchain = generators.resolve(settings)
+    context = f"{toolchain.context}-{settings.project_type.value}"
+    output_paths.claim(project, settings.intermediate_directory, _intermediate_context(project, settings))
+    output_paths.claim(project, settings.artifact_directory, context)
     files = _scan(project)
     text = _cmake(project, settings, files, dependencies)
     marker = build / "cppbuild-owner.json"
     if marker.exists():
         if not _owned(project, settings, source, marker):
             raise SettingsError("Build directory ownership does not match")
-    elif build.exists() and any(build.iterdir()):
+    elif build.exists() and any(p.name not in {output_paths.MARKER, "source"} for p in build.iterdir()):
         raise SettingsError("Refusing to use an unowned build directory")
     storage.atomic_write(marker, storage.encoded(_owner(project, settings, source)))
     cmake = source / "CMakeLists.txt"
@@ -294,6 +316,9 @@ def _generate(project, settings, source, build, dependencies=()):
     query.parent.mkdir(parents=True, exist_ok=True)
     query.touch()
     result = tooling.process(settings, toolchain.configure(source, build), project.root)
+    if result.success:
+        storage.atomic_write(build / "cppbuild-artifact-directory.json",
+                             storage.encoded(str(_artifact_directory(project, settings))))
     compiler = None
     if result.success:
         compiler = generators.compiler(build)
@@ -326,7 +351,8 @@ def update(project):
 @contextmanager
 def lock_nodes(nodes):
     with ExitStack() as stack:
-        for path in sorted({_locations(n.project, n.settings)[0] for n in nodes}):
+        # Stable across output settings, and visible to Project relocation.
+        for path in sorted({n.project.root / ".cppbuild/operations" for n in nodes}):
             stack.enter_context(storage.write_lock(path))
         yield
 
@@ -346,7 +372,11 @@ def _artifacts(project, settings, build):
             for target in configuration["targets"]:
                 if target["name"] == project.name:
                     data = storage.read_json(storage.contained(reply, target["jsonFile"]))
-                    return tuple(storage.contained(build, a["path"]) for a in data.get("artifacts", []))
+                    artifacts = tuple((build / a["path"]).resolve() for a in data.get("artifacts", []))
+                    allowed = _artifact_directory(project, settings)
+                    if any(not path.is_relative_to(allowed) for path in artifacts):
+                        raise SettingsError("CMake reported an artifact outside its configured output directory")
+                    return artifacts
     raise SettingsError("Target/configuration missing from CMake File API")
 
 
@@ -361,7 +391,7 @@ def operate(project, operation):
     project._last_update = None
     if operation == "clean":
         settings, source, build = _prepare(project)
-        with storage.write_lock(source):
+        with storage.write_lock(project.root / ".cppbuild/operations"):
             return OperationReport((clean_target(project, settings, build),))
     roots, nodes = resolve([project])
     root = roots[0]
@@ -413,6 +443,9 @@ def clean_target(project, settings, build):
         else:
             if not marker.is_file() or not _owned(project, settings, source, marker):
                 raise SettingsError("Build directory ownership does not match; clean was not run")
+            artifact_marker = build / "cppbuild-artifact-directory.json"
+            if artifact_marker.exists() and storage.read_json(artifact_marker) != str(_artifact_directory(project, settings)):
+                raise SettingsError("Artifact directory changed; update before cleaning this tree")
             generated = (build / f"{project.name}{toolchain.solution_suffix}") if toolchain.visual_studio else build / "build.ninja"
             if not (build / "CMakeCache.txt").is_file() or not generated.is_file():
                 raise SettingsError("Existing build tree is incomplete; clean was not run")
@@ -477,6 +510,8 @@ def file_path(project, value):
     path = storage.contained(project.root, str(value))
     if path == project.root or any(part in {".cppbuild", ".git", "build"} for part in path.relative_to(project.root).parts):
         raise SettingsError("File operations cannot modify management/build directories")
+    if any(output_paths.generated_directory(p) for p in (path, *path.parents)):
+        raise SettingsError("File operations cannot modify generated output directories")
     return path
 
 

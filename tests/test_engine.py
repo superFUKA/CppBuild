@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from cppbuild import ProjectBuildSettings, ProjectType as T, SettingsError, Solution
-from cppbuild.engine import ProcessReport, _quote, _scan
+from cppbuild.engine import ProcessReport, _quote, _scan, _locations
 
 
 class EngineUnitTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class EngineUnitTests(unittest.TestCase):
 
     def test_unowned_build_directory_is_rejected(self):
         self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
-        path = self.app.root / ".cppbuild/build/vs2022-x64-executable"
+        path = _locations(self.app, self.app._resolved_build_settings())[1]
         path.mkdir(parents=True)
         (path / "other.txt").write_text("keep")
         with self.assertRaises(SettingsError):

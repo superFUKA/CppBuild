@@ -29,6 +29,10 @@ def _strings(values):
 
 
 def _build_settings(value, seen=None):
+    from .output_paths import validate
+    validate(value.intermediate_directory)
+    if isinstance(value, ProjectBuildSettings):
+        validate(value.artifact_directory)
     seen = set() if seen is None else seen
     if id(value) in seen:
         raise SettingsError("Recursive external build settings")

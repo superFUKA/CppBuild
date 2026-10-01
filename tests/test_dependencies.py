@@ -85,10 +85,10 @@ class DependencyTests(unittest.TestCase):
             self.assertTrue(report.success, "\n".join(p.output for p in report.processes))
 
         success(self.solution.run())
-        self.assertFalse(list((self.tool.root / ".cppbuild/build").rglob("Tool.exe")))
+        self.assertFalse(list((self.tool.root / ".cppbuild/output").rglob("Tool.exe")))
         success(self.tool.build())
-        math_lib = next((self.math.root / ".cppbuild/build").rglob("Math.lib"))
-        tool_exe = next((self.tool.root / ".cppbuild/build").rglob("Tool.exe"))
+        math_lib = next((self.math.root / ".cppbuild/output").rglob("Math.lib"))
+        tool_exe = next((self.tool.root / ".cppbuild/output").rglob("Tool.exe"))
         math_bytes, tool_bytes = math_lib.read_bytes(), tool_exe.read_bytes()
         whole_sln = self.solution._last_update.artifacts[0]
         whole_bytes = whole_sln.read_bytes()
@@ -99,6 +99,8 @@ class DependencyTests(unittest.TestCase):
         self.assertEqual(math_lib.read_bytes(), math_bytes)
         self.assertEqual(tool_exe.read_bytes(), tool_bytes)
         success(self.app.run())
+        # MSBuild may relink in system TEMP. Compare clean with the latest build.
+        math_bytes = math_lib.read_bytes()
         success(self.solution.clean())
         self.assertEqual(math_lib.read_bytes(), math_bytes)
         self.assertEqual(tool_exe.read_bytes(), tool_bytes)
@@ -110,4 +112,4 @@ class DependencyTests(unittest.TestCase):
         (self.app.root / "src/main.cpp").write_text("int main() { return 0; }\n")
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=["App"], configuration="Release"))
         success(self.solution.build())
-        self.assertNotIn("dep_Math", (self.app.root / ".cppbuild/generated/vs2022-x64-executable/CMakeLists.txt").read_text())
+        self.assertNotIn("dep_Math", next((self.app.root / ".cppbuild/output/intermediate").rglob("CMakeLists.txt")).read_text())

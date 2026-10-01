@@ -208,7 +208,7 @@ class RelocationVS2022Tests(unittest.TestCase):
         self.assertFalse(old.exists())
         success(self.app.run())
         success(self.solution.build())
-        self.assertNotIn(old.as_posix(), (self.app.root / ".cppbuild/generated/vs2022-x64-executable/CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertNotIn(old.as_posix(), next((self.app.root / ".cppbuild/output/intermediate").rglob("CMakeLists.txt")).read_text(encoding="utf-8"))
         moved = self.solution.move_project("App", "apps/移動 App")
         self.assertTrue(moved.success, str(moved))
         self.solution.set_build_settings(SolutionBuildSettings(configuration="Release"))

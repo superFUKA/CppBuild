@@ -36,7 +36,7 @@ class CleanTests(unittest.TestCase):
                 self.assertIn("Nothing to clean", result.processes[0].output)
                 self.assertEqual(result.processes[0].command, ())
         process.assert_not_called()
-        self.assertFalse((self.app.root / ".cppbuild/build").exists())
+        self.assertFalse((self.app.root / ".cppbuild/output").exists())
         self.assertFalse(list(self.solution.root.rglob("CMakeLists.txt")))
 
     def test_empty_solution_selection_is_success(self):
@@ -158,7 +158,7 @@ class CleanTests(unittest.TestCase):
         self.success(report)
         self.assertEqual(len(report.processes), 1)
         self.assertFalse(release_exe.exists())
-        self.assertFalse((self.solution.root / ".cppbuild/build").exists())
+        self.assertFalse((self.solution.root / ".cppbuild/output").exists())
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
@@ -171,7 +171,7 @@ class CleanTests(unittest.TestCase):
         built = self.app.build()
         self.success(built)
         executable = next(p for p in built.artifacts if p.suffix == ".exe")
-        library = next((lib.root / ".cppbuild/build").rglob("Lib.lib"))
+        library = next((lib.root / ".cppbuild/output").rglob("Lib.lib"))
         original = library.read_bytes()
         provider.settings.path.rename(provider.settings.path.with_suffix(".offline"))
         self.success(self.solution.clean())

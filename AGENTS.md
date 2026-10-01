@@ -2,11 +2,12 @@
 
 ## 最新の追加（2026-10-01）
 
-依存探索ディレクトリ（`dependency_directories`）による依存の自動解決と、`MissingDependenciesError`、静的⇔共有のリンク形式の切り替え（依存先の `project_type` と最上位の `project_types`）を実装済み（未コミット）。全166件成功、利用シナリオは3生成器で全PASS。詳細は実装記録の最新節。手動の参照登録（pin）と依存解決結果の取得は取り下げ。
+- **出力先の指定（未コミット）**：非保存の `ProjectBuildSettings.intermediate_directory`／`artifact_directory` と `SolutionBuildSettings.intermediate_directory`。既定は `.cppbuild/output/{intermediate,artifacts}/<10桁の識別子>/`。旧 `.cppbuild/generated`・`.cppbuild/build` は使わない。全173件成功（実ビルド31件・skipなし、317.017秒）、利用シナリオは3生成器で全PASS。詳細は実装記録の最新節、使い方は利用手順の「出力先の指定」。次の作業はユーザーの指示に応じたコミット（日本語）。
+- **依存探索ディレクトリとリンク形式の切り替え**：`c2a6778` でコミット済み。`dependency_directories` による依存の自動解決、`MissingDependenciesError`、静的⇔共有の切り替え。手動の参照登録（pin）と依存解決結果の取得は取り下げ。
 
 ## 最新の現在地・次の作業（2026-09-30）
 
-**生成器・コンパイラの切り替えを実装済み（未コミット）。** 非保存の `CMakeSettings` で、VS2022（.sln）・VS2026（.slnx）・Ninja Multi-Configとコンパイラ・アーキテクチャを選択できる。生成・ビルド・clean・rebuild・実行・テストに反映する。
+**生成器・コンパイラの切り替えを実装済み（`5b3b690` でコミット済み）。** 非保存の `CMakeSettings` で、VS2022（.sln）・VS2026（.slnx）・Ninja Multi-Configとコンパイラ・アーキテクチャを選択できる。生成・ビルド・clean・rebuild・実行・テストに反映する。
 
 - **合意**：
   - 生成器の省略時はOSごとの固定値（Windows=VS2022、その他=Ninja Multi-Config）。

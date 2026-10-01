@@ -113,6 +113,15 @@ Solutionテンプレートは各Project設定を含み、ビルド成果物を�
 
 ## ジャンル3：設定・情報
 
+### 2026-10-01追加：非保存の出力先指定
+
+- `ProjectBuildSettings.intermediate_directory: str = "output/intermediate"`：生成CMakeLists、IDEファイル、キャッシュ、obj等の領域。
+- `ProjectBuildSettings.artifact_directory: str = "output/artifacts"`：実行ファイル、静的・共有ライブラリ、インポートライブラリ、デバッグ用PDBの領域。MSVC静的ライブラリのコンパイルPDBもCMake標準動作でここへ出る場合がある。
+- `SolutionBuildSettings.intermediate_directory: str = "output/intermediate"`：全体Solution自身の生成領域のみ。所属Projectへ継承しない。Solutionにはartifact_directoryを設けない。
+- 相対パスは設定対象自身の`.cppbuild`基準。`..`と絶対パスに対応する。空文字・None・INHERIT・ドライブ相対パスは拒否する。既存のset_build_settingsでコピー保持・全置換し、管理JSONへ保存しない。
+- 指定先配下に、所有者のルート・Project GUID・生成環境・種類を反映した短い識別子のディレクトリを設ける。全体／個別操作は同一Projectの領域を共用する。配置の具体例とclean・移動時の扱いは[利用手順](USAGE.md#output-directories)を参照。
+- 依存のGUID指定は変更しない。リンク先・実行時の共有ライブラリ検索先はCMakeの生成結果から取得し、成果物パスを利用者に要求しない。
+
 | API | 責務・状態 |
 | --- | --- |
 | solution.settings.get() / save(values) / reload() | 全体の設定管理。基本操作は確認済み |

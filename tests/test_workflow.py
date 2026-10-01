@@ -68,7 +68,7 @@ class WorkflowTests(unittest.TestCase):
         material = self.root / "source.txt"
         material.write_text("material")
         self.solution.create_file_template("text", material)
-        for directory in (self.app.root / ".cppbuild/build", self.solution.root / "build", self.solution.root / ".git"):
+        for directory in (self.app.root / ".cppbuild/output", self.solution.root / "build", self.solution.root / ".git"):
             directory.mkdir(parents=True)
             (directory / "excluded").write_text("generated")
         template = TemplateTools.create_solution_template(self.solution, self.root / "Template")
@@ -220,7 +220,7 @@ class WorkflowIntegrationTests(unittest.TestCase):
             self.assertTrue(solution.info().projects[0].artifacts)
             template = TemplateTools.create_solution_template(solution, root / "Template")
             clone = Solution.create(root / "Cloned", "Cloned", template=template)
-            self.assertFalse((clone.get_project("App").root / ".cppbuild/build").exists())
+            self.assertFalse((clone.get_project("App").root / ".cppbuild/output").exists())
             result = clone.get_project("App").run()
             self.assertTrue(result.success, "\n".join(p.output for p in result.processes))
             self.assertTrue(clone.get_project("App").clean().success)

@@ -55,16 +55,18 @@ class GeneratorSettingsTests(unittest.TestCase):
         self.assertEqual(generators.default_generator(), expected)
 
     @unittest.skipUnless(os.name == "nt", "Visual Studio contexts are Windows-only")
-    def test_default_visual_studio_context_keeps_existing_cache_names(self):
+    def test_visual_studio_environments_have_separate_output_leaves(self):
         settings = self.app._resolved_build_settings()
         toolchain = generators.resolve(settings)
         self.assertEqual(toolchain.architecture, generators.host_architecture())
-        self.assertEqual(engine._locations(self.app, settings)[1].name, f"vs2022-{toolchain.architecture}-executable")
+        original = engine._locations(self.app, settings)
+        self.assertRegex(original[1].name, r"^[0-9a-f]{10}$")
         self.app.set_build_settings(ProjectBuildSettings(architecture="Win32"))
-        self.assertEqual(engine._locations(self.app, self.app._resolved_build_settings())[1].name, "vs2022-Win32-executable")
+        self.assertNotEqual(engine._locations(self.app, self.app._resolved_build_settings()), original)
         self.app.set_build_settings(ProjectBuildSettings(cmake=CMakeSettings(generator="Visual Studio 18 2026", toolset="v143")))
-        name = engine._locations(self.app, self.app._resolved_build_settings())[1].name
-        self.assertRegex(name, r"^vs2026-x64-[0-9a-f]{8}-executable$")
+        changed = engine._locations(self.app, self.app._resolved_build_settings())
+        self.assertNotEqual(changed, original)
+        self.assertRegex(changed[1].name, r"^[0-9a-f]{10}$")
         command = generators.resolve(self.app._resolved_build_settings()).configure("s", "b")
         self.assertEqual(command[command.index("-T") + 1], "v143")
 

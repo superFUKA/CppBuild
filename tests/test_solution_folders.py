@@ -123,7 +123,7 @@ class SolutionFolderTests(unittest.TestCase):
             self.assertTrue(report.success, "\n".join(p.output for p in report.processes))
             report = self.solution.run()
             self.assertTrue(report.success, str(report))
-            sln = next((self.solution.root / ".cppbuild/build").rglob("Main.sln"))
+            sln = next((self.solution.root / ".cppbuild/output").rglob("Main.sln"))
             text = sln.read_text(encoding="utf-8-sig")
             entries = re.findall(r'Project\("\{[^}]+\}"\) = "([^"]+)", "([^"]+)", "\{([^}]+)\}"', text)
             folders = {name: guid for name, path, guid in entries if not path.endswith(".vcxproj")}

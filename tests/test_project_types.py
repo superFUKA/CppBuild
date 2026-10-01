@@ -249,7 +249,7 @@ int value();
             self.success(report)
             if kind == T.INTERFACE_LIBRARY:
                 self.assertEqual(report.artifacts, ())
-                self.assertFalse(list((project.root / ".cppbuild/build/vs2022-x64-interface_library").rglob("value.obj")))
+                self.assertFalse(list(project._last_update.build_directory.rglob("value.obj")))
             else:
                 suffix = ".lib" if kind == T.STATIC_LIBRARY else ".dll"
                 self.assertTrue(any(p.suffix == suffix and p.is_file() for p in report.artifacts))
@@ -265,7 +265,8 @@ int value();
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=names, run_projects=names))
         self.success(self.solution.run())
         self.success(project.clean())
-        self.assertFalse(list((project.root / ".cppbuild/build/vs2022-x64-static_library").rglob("Switch.lib")))
+        from cppbuild import engine
+        self.assertFalse(list(engine._artifact_directory(project, project._resolved_build_settings(T.STATIC_LIBRARY)).rglob("Switch.lib")))
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
     def test_real_interface_with_invalid_cpp_migration_and_display(self):

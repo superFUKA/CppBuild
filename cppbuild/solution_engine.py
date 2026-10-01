@@ -8,7 +8,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from . import engine, storage
-from . import tooling, information, generators
+from . import tooling, information, generators, output_paths
 from .graph import compatible, resolve
 from .models import ProjectType, SettingsError
 
@@ -56,8 +56,9 @@ def _generate(solution, nodes, selected):
         solution._last_update = report
         return report, None
     context = toolchain.context
-    source = storage.contained(solution.root, ".cppbuild/generated/" + context)
-    build = storage.contained(solution.root, ".cppbuild/build/" + context)
+    base = output_paths.claim(solution, solution._build_settings.intermediate_directory, context)
+    source = storage.contained(base, "source")
+    build = base
     lines = ["cmake_minimum_required(VERSION 3.24)",
              f"project({solution.settings._data.name} LANGUAGES NONE)",
              "set(CMAKE_SUPPRESS_REGENERATION ON)"]
@@ -102,7 +103,7 @@ def _generate(solution, nodes, selected):
     owner = {"solution_root": str(solution.root)}
     if owner_path.exists() and storage.read_json(owner_path) != owner:
         raise SettingsError("Whole build directory ownership mismatch")
-    if not owner_path.exists() and build.exists() and any(build.iterdir()):
+    if not owner_path.exists() and build.exists() and any(p.name not in {output_paths.MARKER, "source"} for p in build.iterdir()):
         raise SettingsError("Refusing an unowned whole build directory")
     storage.atomic_write(owner_path, storage.encoded(owner))
     generated = tooling.process(solution._build_settings, toolchain.configure(source, build), solution.root)

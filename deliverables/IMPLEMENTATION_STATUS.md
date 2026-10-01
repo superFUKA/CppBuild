@@ -1,6 +1,22 @@
 # 実装・検証記録
 
-## 最新の現在地：2026-10-01 依存探索ディレクトリとリンク形式の切り替え
+## 最新の現在地：2026-10-01 生成領域と成果物の出力先の指定
+
+非保存の出力先指定を実装した。仕様は [API設計](API_DESIGN.md)・[設定詳細](SETTINGS_DESIGN.md)・[更新・ビルド詳細案](BUILD_DESIGN.md) の2026-10-01追加節、判断は [設計整理メモ](DESIGN_NOTES.md)、使い方は [利用手順](USAGE.md#output-directories) を参照。
+
+- `ProjectBuildSettings.intermediate_directory`／`artifact_directory`、`SolutionBuildSettings.intermediate_directory`。既定は各`.cppbuild`基準の`output/intermediate`・`output/artifacts`。継承なし、管理JSON・スキーマは変更なし。
+- `cppbuild/output_paths.py`（新規）：入力検証、所在・GUID・生成環境・種類からの10桁識別子、所有マーカーによる領域の確保と照合。
+- engine：旧`.cppbuild/generated`・`.cppbuild/build`に代わり、識別子ディレクトリを-B、その`source`を-Sとする。公開ターゲットの出力プロパティを成果物領域へ設定し、File APIの成果物が領域内であることを確認する。中間領域の識別に成果物の出力先を含める（OutDir変更時のMSBuildによる旧成果物削除を防ぐ）。操作ロックは`.cppbuild/operations`へ移した。出力領域はソース走査・テンプレート・ファイル操作から除外する。cleanは成果物の出力先が変わったツリーを拒否する。
+- Project移動は外部出力先への相対パスを補正し、識別子の変更で旧キャッシュを再利用しない。旧出力領域は残す。
+- 既存試験・利用シナリオは、成果物の探索先を`.cppbuild/build`から`.cppbuild/output`へ更新した。
+- 検証（Windows 11、VS2022・VS2026・Ninja＋MSVC）：
+  - `tests/test_output_paths.py`（7件、うち実ビルドは生成器ごとに1件の計3件）：既定値・独立性・入力検証・非保存、共有ルートでのProject・コピー・種類の分離、再open後の走査・テンプレート除外、移動時の出力先維持とキャッシュ識別子の変更、指定出力先でのリンク・実行・clean・再構成。
+  - `CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1`：全173件成功、skipなし、317.017秒。フラグなしでは31件がskip（24.179秒）。
+  - 利用シナリオ6件が、VS2022・Ninja・VS2026で全PASS（出力は `.test-work/usage-out-{vs2022,ninja,vs2026}`）。
+- 制約：外部Solutionは依存操作内で再openするため、別インスタンスに指定した外部Projectの出力先は伝わらず既定値となる。旧出力領域の削除APIはない。Windowsの深い配置ではパス長制限のため短い絶対出力先を指定する。
+- 未実施：Linux/macOSでの確認。今回の変更は未コミット。依存探索ディレクトリの実装は `c2a6778` でコミット済み。
+
+## 2026-10-01：依存探索ディレクトリとリンク形式の切り替え
 
 ECOBuildからのリンク関連の依頼を、ユーザー指示で2点に絞って実装した。仕様は [API設計](API_DESIGN.md) の2026-10-01追加節、判断は [設計整理メモ](DESIGN_NOTES.md)、使い方は [利用手順](USAGE.md) を参照。
 
@@ -15,7 +31,7 @@ ECOBuildからのリンク関連の依頼を、ユーザー指示で2点に絞�
   - `tests/test_dependency_directories.py`（10件、実ビルド1件）：菱形の依存、見つからない依存の一覧、重複エラー、明示リンクの優先、入力検証、空設定の非書き出し、テンプレート、GUIDでの形式指定、実ビルド（STLを静的／共有にしてrunと全体build）。
   - 全166件成功（skipなし、実ビルド28件）、282.521秒。
   - 利用シナリオ6件（84操作）が、VS2022・Ninja・VS2026で全PASS（出力は `.test-work/usage-deps-*`）。
-- 未実施：Linux/macOSでの確認。今回の変更は未コミット。
+- 未実施：Linux/macOSでの確認。`c2a6778` でコミット済み。
 
 
 ## 最新の現在地：2026-09-30 生成器・コンパイラの切り替えを実装

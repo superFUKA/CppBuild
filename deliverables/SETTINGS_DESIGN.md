@@ -1,5 +1,13 @@
 # 設定の受け渡し・継承・種類別設定・実行順
 
+## 2026-10-01追加：出力先の非保存設定
+
+- ProjectBuildSettingsに`intermediate_directory="output/intermediate"`と`artifact_directory="output/artifacts"`を追加。SolutionBuildSettingsは`intermediate_directory="output/intermediate"`だけを持つ。
+- 出力先の継承・Solutionによる所属Projectの一括設定は設けない。INHERITとNoneは不可。既存のconfiguration・architecture・cpp_standard・tools・cmakeの継承は維持する。
+- 相対パスは設定対象自身の`.cppbuild`基準。`..`と絶対パスを受け付け、ドライブ相対パス・空文字・CMakeで文字列として扱えない値は拒否する。
+- 管理JSON・スキーマは変更しない。再open時に出力先設定を復元しない。生成物の所有マーカーと成果物領域の記録は上書き・cleanの照合用で、設定復元元にはしない。
+- 外部Solutionは従来どおり依存操作内で再openする。別インスタンスのProjectBuildSettingsは伝播せず、外部Projectの出力先は既定値。外部Project単位の設定を操作へ渡すAPIは今回追加しない。
+
 > 2026-09-17 実装開始後の追記：M1（管理モデル・設定保存・非保存ビルド設定）を実装し、自動テスト13件を確認。最新の進捗・検証・次の作業は[実装記録](IMPLEMENTATION_STATUS.md)を参照。以下の「未着手」「実装はまだ開始しない」は設計整理時点の記録であり、今回の実装依頼を制限しない。設計の合意状態は維持する。
 
 更新日：2026-09-17。メソッドでのビルド設定受け取り、ビルド設定非保存、管理設定保存、種類別ファイル、変更可能な実行順は確認済み。最新のユーザー指示により、以下の継承規則・既定の実行方式・GoogleTestのFetchContent導入も現時点の案で暫定採用とする。後から変更可能な実装上の細部は、その都度の承認を必須にせず具体化する。実装・実ビルド検証は未実施。

@@ -22,7 +22,10 @@ class GeneratorScenario:
     generator = None
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="cppbuild-gen-")
+        # MSBuild's system-TEMP tracking cannot validate incremental builds.
+        workspace = Path(__file__).resolve().parents[1] / ".test-work"
+        workspace.mkdir(exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="gen-", dir=workspace)
         self.addCleanup(temporary.cleanup)
         self.solution = Solution.create(Path(temporary.name) / "日本語 space", "Demo")
         self.cmake = CMakeSettings(generator=self.generator)
