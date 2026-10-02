@@ -3,7 +3,7 @@
 A failed publish can leave unreferenced type files, never a half-updated manifest.
 Concurrent writers cooperate using an exclusive lock; stale locks are diagnosed.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -125,6 +125,15 @@ def write_lock(directory):
         yield
     finally:
         lock.unlink()
+
+
+@contextmanager
+def operation_lock(*roots):
+    """The operation locks of Solution and Project roots, in a fixed order."""
+    with ExitStack() as stack:
+        for directory in sorted({Path(root) / ".cppbuild/operations" for root in roots}):
+            stack.enter_context(write_lock(directory))
+        yield
 
 
 def contained(root, value):

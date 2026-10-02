@@ -19,6 +19,16 @@
 - **成果物の特定**：`file(GENERATE)` の出力ファイルをやめ、CMake File APIの成果物一覧と `nameOnDisk` を使う。
 - **残る制約**：構成は常にSolution全体で行う（他ProjectのCMakeの誤りで個別操作も失敗する）。旧Projectごとの`.cppbuild/output`は使わないが自動削除しない。M3aの試験 `tests/test_integration_candidate.py` は旧方式の技術検証の記録として残す（製品コードを使わない）。Linux/macOSでの実検証は未実施。
 
+### 設計レビューへの対応（2026-10-03）
+
+[全体設計レビュー](DESIGN_REVIEW_2026-10-03.md)の優先度の高い4項目を、公開APIを変えずに次のとおり実装した。
+
+- **状態とロック**：操作ロックは、全体／個別の生成・ビルド・テスト・cleanで、Solutionと所属Projectの`.cppbuild/operations`を共通に取る（`storage.operation_lock`）。従来、Project.cleanは自分のProjectだけをロックしていた。状態の判定材料に、ツリーを決める設定（`information.tree_key`：Solutionのintermediate_directory、アーキテクチャ、CMakeSettings、ToolSettings）を加えた。`info()`はツールを起動しないため、生成器の解決結果ではなく設定値を使う。個別操作では、自分の設定が同じツリーを選ぶProjectだけを生成・ビルド済みとして記録する（全体操作は全メンバーの一致を事前に検査済み）。
+- **表示とビルド参加**：Python側の要求を `Request(built, listed)` で表し、CMakeへは従来どおり `<形式>`／`DISPLAY_<形式>`／`DISPLAY` のリストで渡す（CMakeの変数はリストのため）。
+- **名前の検査**：CppBuildなしで形式を切り替えられるため、各Projectが作り得るすべてのターゲット名と別名を検査する。CMake・GoogleTestの予約名（`ZERO_CHECK`、`gtest_main`など）も拒否する。実行ファイル・TESTと同名のDLLを一緒にビルドすると、実ビルドで`App.pdb`・`App.ilk`が1つになり上書きし合うことを確認したため、エラーにした（成功するが、デバッグ情報が壊れる）。同名のテストが2つのTEST Projectにあると、CTestが後のラベルを両方に付け、片方のテストで他方のテストも実行することを実ビルドで確認した。テスト名は実行時まで分からず事前に拒否できないため、`gtest_discover_tests` の `TEST_PREFIX "<Project名>."` で区別し、CppBuildの結果では接頭辞を外す。
+- **生成ファイルの書き込み**：生成内容はplanごとに一度だけ確定し（`Plan._all_documents`）、全パスの所有を確認してから `storage.publish_documents` で書く。CppBuildが生成していないファイルが1つでもあれば何も書かず、書き込み途中の失敗では書き換えたファイルを戻す。ロックの範囲は、書き込むファイルのディレクトリから決める（リンク先の単独利用のために書く、さらに先のSolutionも含む）。
+- **見送った点**：設定とソース一覧を操作の最初に固定する作り直し（`Plan`がSolution・Projectのオブジェクトを参照し、リンク先のplanを生成時に解決する構造は維持）。リンク先の単独利用用ファイルを生成できなかった理由を結果に返すこと（公開の結果型の変更が要る）。強制終了・電源断まで含む書き込みの原子性。
+
 ### CMakeの推奨に照らした見直し（2026-10-02）
 
 ユーザーの依頼で、生成するCMakeと運用を一般的な推奨と照らし合わせ、無理なく直せる箇所を修正した。

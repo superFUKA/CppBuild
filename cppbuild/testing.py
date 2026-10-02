@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import uuid
 import xml.etree.ElementTree as ET
 
-from . import engine
+from . import cmake_files, engine
 from . import tooling, information
 from .models import ProjectType, SettingsError
 
@@ -32,7 +32,8 @@ class TestReport:
         return bool(self.cases) and any(c.status == "passed" for c in self.cases) and all(c.status in {"passed", "skipped"} for c in self.cases)
 
 
-def read_results(path):
+def read_results(path, prefix=""):
+    """Cases from a JUnit file; prefix is the CTest name prefix of the TEST Project, not reported."""
     try:
         root = ET.parse(path).getroot()
         if root.tag not in {"testsuite", "testsuites"}:
@@ -40,6 +41,8 @@ def read_results(path):
         cases = []
         for item in root.iter("testcase"):
             name = item.attrib["name"]
+            if prefix and name.startswith(prefix):
+                name = name[len(prefix):]
             status = "failed" if item.find("failure") is not None or item.find("error") is not None else "skipped" if item.find("skipped") is not None or item.get("status") in {"notrun", "disabled"} else "passed"
             cases.append(TestCaseResult(name, status, "\n".join(e.text or "" for e in item)))
         if not cases:
@@ -49,14 +52,18 @@ def read_results(path):
         return (), (f"Test results unavailable: {exc}",)
 
 
-def _run(plan, node, build):
-    """Build one TEST Project in the configured tree and run its CTest label."""
+def _run(plan, node, build, tree_settings=None):
+    """Build one TEST Project in the configured tree and run its CTest label.
+
+    tree_settings: what configured the tree for an individual operation (see engine.generated).
+    """
     project, settings = node.project, node.settings
     name = engine.target(project, settings)
     results = [engine.build_targets(settings, build, [name])]
     success = results[-1].success
     for item in engine.closure(node):
-        information.built(item.project, item.settings, engine._node_artifacts(build, item) if success else (), success)
+        if tree_settings is None or engine.in_tree(item, tree_settings):
+            information.built(item.project, item.settings, engine._node_artifacts(build, item) if success else (), success)
     if not success:
         return TestReport(project.name, tuple(results), diagnostics=("Build failed; tests not run",))
     try:
@@ -70,7 +77,7 @@ def _run(plan, node, build):
                              "--output-junit", output], project.root,
                              env=engine.runtime_environment(engine.closure(node), settings, build))
     results.append(tested)
-    cases, diagnostics = read_results(output)
+    cases, diagnostics = read_results(output, cmake_files.test_prefix(project))
     return TestReport(project.name, tuple(results), cases, diagnostics)
 
 
@@ -83,7 +90,7 @@ def project_test(project):
         update = engine._update(plan, node)
         if not update.success:
             return TestReport(project.name, (update.process,), diagnostics=("Configure failed; tests not run",))
-        report = _run(plan, node, update.build_directory)
+        report = _run(plan, node, update.build_directory, node.settings)
         return TestReport(report.project, (update.process, *report.processes), report.cases, report.diagnostics)
 
 

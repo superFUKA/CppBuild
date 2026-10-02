@@ -5,14 +5,32 @@ Solutions (with the same GUID rules as before), writes the CMake files of every
 involved Solution, and turns the non-saved build settings into a CMake initial
 cache script. Generated files never contain those settings.
 """
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import cached_property
 import hashlib
+from pathlib import Path
 
 from . import cmake_files, storage
 from .graph import resolve
 from .models import Dependency, ImportedLibrary, ProjectType, SettingsError
+
+@dataclass
+class Request:
+    """What one provider creates for the Projects that link it.
+
+    built: link types requested by Projects of the default build.
+    listed: link types requested by Projects listed only for the IDE (solution_folders);
+    those targets exist for the IDE but stay out of the default build unless also built.
+    """
+    built: set = field(default_factory=set)
+    listed: set = field(default_factory=set)
+
+    def tokens(self):
+        """The CMake request list (see cmake_files._requested_types)."""
+        return (sorted(cmake_files.KIND[k] for k in self.built)
+                + sorted("DISPLAY_" + cmake_files.KIND[k] for k in self.listed - self.built))
+
 
 @dataclass
 class Plan:
@@ -24,29 +42,9 @@ class Plan:
 
     # Requests ------------------------------------------------------------------
 
-    def _requests(self):
-        """(all, cross-Solution) requests by provider GUID, each split into (used, display only)."""
-        display = self._display_guids
-        requests, external = {}, {}
-        for project in self.projects.values():
-            index = 1 if project.settings._data.guid in display else 0
-            for dependency in project.settings._data.dependencies.values():
-                if isinstance(dependency, Dependency) and dependency.project_guid in self.projects:
-                    provider = self.projects[dependency.project_guid]
-                    requests.setdefault(dependency.project_guid, (set(), set()))[index].add(dependency.project_type)
-                    if project.solution.root != provider.solution.root:
-                        external.setdefault(dependency.project_guid, (set(), set()))[index].add(dependency.project_type)
-        return requests, external
-
-    @staticmethod
-    def _kinds(request):
-        """Requested link types; those requested only by IDE-listed Projects stay out of the default build."""
-        used, shown = request
-        return sorted(cmake_files.KIND[k] for k in used) + sorted("DISPLAY_" + cmake_files.KIND[k] for k in shown - used)
-
     @cached_property
-    def _display_guids(self):
-        """Projects of linked Solutions listed only for the IDE (solution_folders)."""
+    def listed(self):
+        """GUIDs of linked Solutions' Projects listed only for the IDE (solution_folders)."""
         needed = set()
 
         def visit(node):
@@ -58,24 +56,34 @@ class Plan:
             visit(node)
         return {guid for guid in self.projects if guid not in needed}
 
+    def _requests(self):
+        """(every request, cross-Solution requests) by provider GUID."""
+        every, crossing = {}, {}
+        for project in self.projects.values():
+            listed = project.settings._data.guid in self.listed
+            for dependency in project.settings._data.dependencies.values():
+                if isinstance(dependency, Dependency) and dependency.project_guid in self.projects:
+                    provider = self.projects[dependency.project_guid]
+                    tables = [every] if project.solution.root == provider.solution.root else [every, crossing]
+                    for table in tables:
+                        request = table.setdefault(dependency.project_guid, Request())
+                        (request.listed if listed else request.built).add(dependency.project_type)
+        return every, crossing
+
     def external_requests(self):
-        requests, _ = self._requests()
-        display = self._display_guids
+        every, _ = self._requests()
         result = []
         for project in self._external_projects():
             guid = project.settings._data.guid
-            kinds = self._kinds(requests[guid]) if guid in requests else []
-            if guid in display:
-                kinds = ["DISPLAY"] + kinds
-            if kinds:
-                result.append((project, kinds))
+            tokens = (["DISPLAY"] if guid in self.listed else []) + (every[guid].tokens() if guid in every else [])
+            if tokens:
+                result.append((project, tokens))
         return result
 
     def member_requests(self):
-        _, external = self._requests()
-        return [(p, self._kinds(external[p.settings._data.guid]))
-                for p in sorted(self.solution.projects(), key=lambda p: p.name) if p.settings._data.guid in external]
-
+        _, crossing = self._requests()
+        return [(p, crossing[p.settings._data.guid].tokens())
+                for p in sorted(self.solution.projects(), key=lambda p: p.name) if p.settings._data.guid in crossing]
     def _external_projects(self):
         return sorted((p for p in self.projects.values() if p.solution.root != self.solution.root),
                       key=lambda p: (str(p.solution.root), p.name))
@@ -112,7 +120,11 @@ class Plan:
     # Files ---------------------------------------------------------------------
 
     def documents(self):
-        """Generated files of every involved Solution, keyed by path."""
+        """Generated files of every involved Solution, keyed by path, decided once per plan."""
+        return dict(self._all_documents)
+
+    @cached_property
+    def _all_documents(self):
         result = {}
         self._documents(result, set())
         return result
@@ -140,17 +152,22 @@ class Plan:
             own._documents(result, visited)
 
     def write(self):
-        return tuple(path for path, text in sorted(self.documents().items(), key=lambda item: str(item[0]))
-                     if cmake_files.write(path, text))
+        """Write every generated file or none: CppBuild never replaces a file it did not generate,
+        and a failed write restores the files already replaced. Callers hold lock()."""
+        documents = dict(sorted(self._all_documents.items(), key=lambda item: str(item[0])))
+        foreign = [str(path) for path in documents if path.exists() and not cmake_files.generated_file(path)]
+        if foreign:
+            raise SettingsError("Files exist that were not generated by CppBuild; move them away to let CppBuild "
+                                "manage these directories: " + ", ".join(foreign))
+        return tuple(Path(path) for path in
+                     storage.publish_documents({path: text.encode("utf-8") for path, text in documents.items()}))
 
     @contextmanager
     def lock(self):
-        with ExitStack() as stack:
-            directories = {self.solution.root / ".cppbuild/operations"}
-            directories |= {s.root / ".cppbuild/operations" for s in self.external_solutions()}
-            directories |= {p.root / ".cppbuild/operations" for p in self.projects.values()}
-            for directory in sorted(directories):
-                stack.enter_context(storage.write_lock(directory))
+        """The operation locks of this Solution, its Projects and every directory written."""
+        roots = {self.solution.root, *(p.root for p in self.projects.values())}
+        roots |= {path.parent for path in self._all_documents}
+        with storage.operation_lock(*roots):
             yield
 
     # Settings ------------------------------------------------------------------
@@ -201,23 +218,34 @@ class Plan:
 
     # Checks --------------------------------------------------------------------
 
-    def check(self, configuration_of):
-        """Validation that previously happened while generating, before any tool runs."""
-        names = {}
-        for project in self.projects.values():
-            base = cmake_files.base_name(project)
-            previous = names.setdefault(base.casefold(), project)
-            if previous is not project:
-                raise SettingsError(f"Two Projects map to the CMake name {base}: {previous.root} and {project.root}; "
-                                    "rename one of the Solutions or Projects")
+    def _check_names(self):
+        """Target, ALIAS and file names that would collide in the one CMake project or its bin directory."""
+        targets, aliases = [], []
+        for project in sorted(self.projects.values(), key=lambda p: str(p.root)):
+            own_targets, own_aliases = _names(project)
+            targets += [(name, project) for name in own_targets]
+            aliases += [(name, project) for name in own_aliases]
+        _unique(targets, "target")
+        _unique(aliases, "ALIAS")
+        # A separate directory for IDE-listed DLLs does not make same-named DLLs safe to load.
         shared = {}
         for node in self.nodes:
-            # A separate directory for IDE-listed DLLs does not make same-named DLLs safe to load.
             if node.settings.project_type == ProjectType.SHARED_LIBRARY:
                 previous = shared.setdefault(node.project.name.casefold(), node.project)
                 if previous is not node.project:
                     raise SettingsError(f"Two shared libraries would both be named {node.project.name}: "
                                         f"{previous.root} and {node.project.root}")
+        # Programs and DLLs share the runtime directory; the linkers' App.pdb and App.ilk would collide.
+        for node in self.nodes:
+            if node.settings.project_type in {ProjectType.EXECUTABLE, ProjectType.TEST} and node.project.settings._data.guid not in self.listed:
+                library = shared.get(node.project.name.casefold())
+                if library is not None and library.settings._data.guid not in self.listed:
+                    raise SettingsError(f"The program {node.project.name} and a shared library of the same name "
+                                        f"({library.root}) would overwrite each other's debug files; rename one of them")
+
+    def check(self, configuration_of):
+        """Validation that previously happened while generating, before any tool runs."""
+        self._check_names()
         for node in self.nodes:
             kind = node.settings.project_type
             if kind != ProjectType.INTERFACE_LIBRARY and not cmake_files._compiled_sources(node.project, self.files[node.project.settings._data.guid]):
@@ -231,6 +259,37 @@ class Plan:
             for value in node.project.settings._data.dependencies.values():
                 if isinstance(value, ImportedLibrary) and value.project_type != ProjectType.INTERFACE_LIBRARY:
                     _check_imported(node.project, value, configuration)
+
+
+def _names(project):
+    """Every CMake target and ALIAS name the Project's generated file can create.
+
+    Library types can be switched without CppBuild (<Solution>_<Project>_TYPE), so
+    every type the Project supports counts, not only the ones this operation needs.
+    """
+    initial = project.settings._data.initial_type
+    if initial in {ProjectType.EXECUTABLE, ProjectType.TEST}:
+        return [cmake_files.base_name(project)], []
+    kinds = [k for k in cmake_files.LIBRARY_ORDER if k in project.settings._data.types]
+    return ([cmake_files.target_name(project, k) for k in kinds],
+            [cmake_files.alias_name(project)] + [cmake_files.link_name(project, k) for k in kinds])
+
+
+# Targets that CMake's generators or GoogleTest define in every tree with tests.
+RESERVED = {name.casefold() for name in ("ALL_BUILD", "ZERO_CHECK", "RUN_TESTS", "INSTALL", "PACKAGE", "edit_cache",
+                                         "rebuild_cache", "list_install_components", "gtest", "gtest_main", "gmock",
+                                         "gmock_main")}
+
+
+def _unique(entries, what):
+    seen = {}
+    for name, project in entries:
+        if name.casefold() in RESERVED:
+            raise SettingsError(f"{project.root} maps to the reserved CMake {what} {name}; rename the Solution or Project")
+        previous = seen.setdefault(name.casefold(), project)
+        if previous is not project:
+            raise SettingsError(f"Two Projects map to the CMake {what} {name}: {previous.root} and {project.root}; "
+                                "rename one of the Solutions or Projects")
 
 
 def _check_imported(project, value, configuration):

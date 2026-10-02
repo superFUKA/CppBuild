@@ -63,7 +63,7 @@ class SolutionFolderTests(unittest.TestCase):
         roots, nodes = resolve(self.solution.projects(), include_external_members=True)
         self.assertEqual({n.project.name for n in nodes}, {"App", "Lib", "Unused"})
         plan = workspace.plan(self.solution)
-        display = {plan.projects[g].name for g in plan._display_guids}
+        display = {plan.projects[g].name for g in plan.listed}
         self.assertEqual(display, {"Unused"})
         self.assertEqual([(p.name, kinds) for p, kinds in plan.external_requests()], [("Lib", ["STATIC"]), ("Unused", ["DISPLAY"])])
         self.assertEqual([folder for _, _, _, folder in plan.linked_solutions()], ["Linked Projects/External"])

@@ -1,6 +1,20 @@
 # 実装・検証記録
 
-## 最新の現在地：2026-10-03 コードレビュー5件の修正
+## 最新の現在地：2026-10-03 設計レビュー4項目の実装
+
+[全体設計レビュー](DESIGN_REVIEW_2026-10-03.md)の優先度の高い4項目を実装した。判断と見送った点は[設計整理メモ](DESIGN_NOTES.md)の「設計レビューへの対応」。前段のコードレビュー5件の修正は `eb3b6b3` でコミット済み。
+
+- 状態とロック：`storage.operation_lock` を全体／個別の全操作（Project.cleanを含む）で共通に使う。`information.tree_key` を状態の判定材料に加え、個別操作では同じツリーを選ぶProjectだけを記録する（`engine.in_tree`）。
+- 表示とビルド参加：`workspace.Request(built, listed)`、`Plan.listed`。動作は変更なし。
+- 名前：`Plan._check_names`（全ターゲット名・別名・予約名・実行ファイルと同名DLL）。TESTのCTest名に `TEST_PREFIX "<Project名>."` を付け、`testing.read_results` で外す。
+- 書き込み：`Plan.write` が所有の一括確認と `storage.publish_documents` で全部書くか何も書かない。`Plan.lock` は書き込むディレクトリから範囲を決める。`cmake_files.write` は削除。
+- 実検証で分かったこと（Ninja）：実行ファイル `App` とリンク先DLL `App` はビルド・実行とも成功するが、`App.pdb`・`App.ilk` が1つになる。2つのTEST Projectに同名テストがあると、後者の `test()` が前者のテストも実行し、その失敗を自分の結果として報告する（接頭辞なしで新しい試験が失敗することを確認）。`S_Lib_static` の重複はCMakeの構成時エラーになる。
+- 試験：新規 `tests/test_tree_state.py`（ロック共通・ツリー変更でstale・個別操作の記録範囲）、`tests/test_names.py`（ターゲット名・予約名・実行ファイルと同名DLL・テスト名の接頭辞）、`tests/test_linked_outputs.py` に一括書き込み・失敗時の復元・ロック範囲、`tests/test_testing.py` に同名テストの実試験（VS2022）。追加した試験は修正前の動作で失敗する内容（ロック・stale・書き込みは手元の再現、同名テストは接頭辞を外して確認）。
+- 検証（Windows 11、CMake 4.2.3、GoogleTestはオンライン取得）：`CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1` で全195件成功、skipなし、391.4秒。利用シナリオ7件が3生成器で全PASS（`.test-work/usage-design-*`）。
+- 振る舞いの変更：全体操作中のProject.cleanは `SettingsConflictError`。ツリーを変えると `info()` が `stale`。実行ファイルと同名の共有ライブラリを一緒にビルドする構成と、予約名になる構成はエラー。CTestのテスト名に `<Project名>.` が付く（CppBuildの `TestCaseResult.name` は従来どおり）。
+- 未実施：Linux/macOS、VS IDEのGUI操作、実際に複数プロセスを競合させる試験。変更は未コミット。
+
+## 2026-10-03 コードレビュー5件の修正（`eb3b6b3` でコミット済み）
 
 下記のコードレビュー5件を修正し、回帰試験を追加した。設計レビューの他の改善案（状態とロック、生成ファイル一式の事前確定など）は未着手。
 

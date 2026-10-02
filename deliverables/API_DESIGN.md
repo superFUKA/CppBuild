@@ -145,7 +145,7 @@ Solutionテンプレートは各Project設定を含み、ビルド成果物を�
 | solution.settings.set_build_profile(profile) | ビルド設定を保存しない最新方針により、保存用APIとしては撤回。名前付き構成管理は利用側に委ねる |
 | solution.info() | 設定・認識済みファイル・取得済み成果物・状態等。取得のための走査やCMake実行なし |
 
-M6実装：`info()`は`SolutionInfo`とProjectごとの`ProjectInfo`を返す。設定はコピー、ファイルと成果物は直近の観測値。`generation_state`はunknown/current/stale/failed、`build_state`はこれらにcleanedを加える。再open直後はunknown。API経由の変更と設定差分で古さを判定し、外部ファイル変更は走査しないため`external_changes_checked=False`を返す。`last_operation`と`last_success`は直近操作の結果で、非同期run未完了時はsuccessがNone。成果物一覧は存在を再検証した一覧ではない。
+M6実装：`info()`は`SolutionInfo`とProjectごとの`ProjectInfo`を返す。設定はコピー、ファイルと成果物は直近の観測値。`generation_state`はunknown/current/stale/failed、`build_state`はこれらにcleanedを加える。再open直後はunknown。API経由の変更と設定差分で古さを判定し、外部ファイル変更は走査しないため`external_changes_checked=False`を返す。`last_operation`と`last_success`は直近操作の結果で、非同期run未完了時はsuccessがNone。成果物一覧は存在を再検証した一覧ではない。2026-10-03更新：古さの判定に、ビルドツリーを決める設定（`SolutionBuildSettings.intermediate_directory`、生成器・コンパイラ・アーキテクチャ・ToolSettings）を含める。ツリーを変えると、未生成でも`current`ではなく`stale`になる。Projectの個別操作は、そのProjectの設定のツリーで全体を構成するが、生成・ビルド済みとして記録するのは、自分の設定が同じツリーを選ぶProjectだけ。生成・ビルド・テスト・cleanは、全体／個別とも同じSolutionの操作ロックを使い、他の操作中は`SettingsConflictError`になる（待たずに失敗する）。
 
 詳細案：SolutionSettingsDataは所属参照・main_project・共有テンプレート等、ProjectSettingsDataは対応種類・ソース・依存・PCH・種類別設定への参照等を持つ。実行用のSolutionBuildSettings／ProjectBuildSettingsは含めず、saveの対象にしない。全体saveで個別設定を上書きしない。所属の変更はadd/removeを通す。
 

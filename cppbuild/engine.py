@@ -236,10 +236,19 @@ def project_plan(project):
     return plan, node
 
 
-def generated(plan, files_success):
-    """Record the generation result for every member Project."""
+def in_tree(node, settings):
+    """Whether the node's own settings select the tree configured with settings."""
+    return information.tree_key(node.project, node.settings) == information.tree_key(node.project, settings)
+
+
+def generated(plan, files_success, settings=None):
+    """Record the generation result for the members whose own settings select this tree.
+
+    Whole-Solution operations (settings None) already require every member to match.
+    """
     for node in plan.roots:
-        information.generated(node.project, node.settings, plan.files[node.project.settings._data.guid], files_success)
+        if settings is None or in_tree(node, settings):
+            information.generated(node.project, node.settings, plan.files[node.project.settings._data.guid], files_success)
 
 
 def _update(plan, node):
@@ -256,7 +265,7 @@ def _update(plan, node):
             project_file, filters_file = candidate, folder / f"{target(project, settings)}.vcxproj.filters"
     report = UpdateReport(result, files, build, solution_file, project_file, filters_file, toolchain.generator, compiler)
     project._last_update = report
-    generated(plan, result.success)
+    generated(plan, result.success, settings)
     return report
 
 
@@ -294,7 +303,8 @@ def operate(project, operation):
             results.append(build_targets(settings, build, names))
         success = results[-1].success
         for item in closure(node):
-            information.built(item.project, item.settings, _node_artifacts(build, item) if success else (), success)
+            if in_tree(item, settings):
+                information.built(item.project, item.settings, _node_artifacts(build, item) if success else (), success)
         if not success:
             return OperationReport(tuple(results))
         produced = _node_artifacts(build, node)
@@ -309,7 +319,8 @@ def clean(project):
     project._check_active()
     project.settings.reload()
     settings = project._resolved_build_settings()
-    with storage.write_lock(project.root / ".cppbuild/operations"):
+    # The Solution's operation lock, as every operation on its shared build tree takes.
+    with storage.operation_lock(project.solution.root, project.root):
         results = clean_targets(project.solution, settings, [target(project, settings)])
     cleaned(project, settings, all(r.success for r in results))
     return OperationReport(tuple(results))

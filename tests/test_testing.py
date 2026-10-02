@@ -165,6 +165,21 @@ class GoogleTestIntegrationTests(unittest.TestCase):
             self.assertFalse(report.success)
             self.assertFalse(any(Path(p.command[0]).stem == "ctest" for p in report.processes))
 
+    def test_same_test_name_in_two_test_projects(self):
+        with tempfile.TemporaryDirectory(prefix="cppbuild-gtest-") as temp:
+            solution = Solution.create(Path(temp) / "S", "S")
+            for name, check in (("TestsA", "EXPECT_EQ(1, 2)"), ("TestsB", "EXPECT_EQ(1, 1)")):
+                tests = solution.add_project(name, name, T.TEST)
+                tests.set_build_settings(ProjectBuildSettings(googletest_archive=os.environ.get("CPPBUILD_TEST_GTEST_ARCHIVE")))
+                tests.add_file("src/test.cpp", content=f"#include <gtest/gtest.h>\nTEST(Same, Name) {{ {check}; }}\n", auto_update=False)
+            # Each TEST Project runs and reports only its own Same.Name.
+            report = solution.get_project("TestsB").test()
+            self.assertTrue(report.success, str(report))
+            self.assertEqual([(c.name, c.status) for c in report.cases], [("Same.Name", "passed")])
+            report = solution.test()
+            self.assertEqual([[(c.name, c.status) for c in p.cases] for p in report.projects],
+                             [[("Same.Name", "failed")], [("Same.Name", "passed")]])
+
     def test_public_run_order_continue_parallel_and_wait(self):
         with tempfile.TemporaryDirectory(prefix="cppbuild-run-") as temp:
             solution = Solution.create(temp, "Demo")

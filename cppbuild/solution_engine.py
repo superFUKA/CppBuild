@@ -104,7 +104,7 @@ def clean(solution):
     if not selected:
         return engine.OperationReport((engine.ProcessReport((), 0, "Nothing to clean: no Projects selected"),))
     settings = solution._build_settings
-    with storage.write_lock(solution.root / ".cppbuild/operations"):
+    with storage.operation_lock(solution.root, *(p.root for p in solution.projects())):
         names = [engine.target(n.project, n.settings) for n in selected]
         results = engine.clean_targets(solution, settings, names if explicit else None)
     success = all(r.success for r in results)

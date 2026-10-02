@@ -31,6 +31,16 @@ class SolutionInfo:
     external_changes_checked: bool = False
 
 
+def tree_key(project, settings):
+    """What selects the build tree, without running tools: its location and generation environment.
+
+    The configuration is not part of it (one tree holds every configuration), but it
+    is part of the signature through the settings.
+    """
+    return (project.solution._build_settings.intermediate_directory, settings.architecture,
+            deepcopy(settings.cmake), deepcopy(settings.tools))
+
+
 def signature(project, settings=None, seen=None):
     from .models import Dependency
     seen = set() if seen is None else seen
@@ -45,7 +55,8 @@ def signature(project, settings=None, seen=None):
             if child is None:
                 raise SettingsError("Dependency no longer registered")
             dependencies.append(signature(child, child._resolved_build_settings(value.project_type), seen | {key}))
-    return (deepcopy(project.settings._data), deepcopy(settings), project._file_revision, tuple(dependencies))
+    return (deepcopy(project.settings._data), deepcopy(settings), tree_key(project, settings),
+            project._file_revision, tuple(dependencies))
 
 
 def generated(project, settings, files, success):
