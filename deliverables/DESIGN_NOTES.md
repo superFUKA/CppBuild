@@ -1,5 +1,77 @@
 # 設計整理メモ
 
+## 2026-10-01実装：CppBuildなしで使えるCMakeの生成
+
+ユーザーは「CppBuildが生成したファイルだけで、CppBuildなしで構成・ビルド・.sln生成・実行・テストでき、持ち出しもできる」状態を目指す（ECOBuildの下書き依頼3と同じ目的）。Projectごとの独立CMake構成にはこだわらない。下の着地点・API影響の検討をユーザーが了承し、「実装が歪む箇所がなければ進める」と指示した。実装時の判断は次のとおり（検討時の記録はその下に残す）。
+
+### 実装時の判断
+
+- **生成ファイルを2つに分けた**：Solutionの `CMakeLists.txt` は所属Projectだけを並べ、誰に取り込まれても同じ内容にする。リンク先の解決結果（どのSolutionをどこから取り込むか）は最上位の視点でしか決まらないため、`CppBuildTopLevel.cmake` に分け、最上位のときだけ読む。他のSolutionから取り込まれるとき、リンク先Solutionの入口は自分の依存を取り込まない（最上位が依存の全体を解決して取り込む）。
+- **必要なProjectだけ構成**：最上位はリンク先Projectごとに要求する形式を `CPPBUILD_REQUEST_<GUIDの16進>` で渡し、リンク先の入口は要求されたProjectだけを `add_subdirectory` する。リンク先のTESTは登録しない（`PROJECT_IS_TOP_LEVEL`）。表示だけの未参照Project（solution_folders）は `DISPLAY` を要求し、ターゲット単位で `EXCLUDE_FROM_ALL`／`EXCLUDE_FROM_DEFAULT_BUILD` を付ける。VSでは、`add_subdirectory(... EXCLUDE_FROM_ALL)` にするとそのディレクトリのターゲットが.slnから消えることを試作で確認したため、ディレクトリ単位では除外しない。2026-10-03修正（レビュー指摘）：表示だけのProjectからの依存要求は `DISPLAY_<形式>` として通常の要求と分け、その形式のターゲットだけを既定ビルドから除外する（使う側の要求と表示側の要求が同じ形式なら通常どおり作る）。表示だけの実行ファイル・TEST・DLLは、最上位が `add_subdirectory` 前に設定する `CPPBUILD_LINKED_OUTPUT` を使って `${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/_linked/<リンク先>` に出し、利用側の同名実行ファイルとの出力衝突（Ninjaの `multiple rules generate`）を避ける。
+- **リンクは別名で**：利用側は `<Solution>::<Project>_<保存した形式>` をリンクし、提供側がその別名を選択形式のターゲットへ割り当てる。定義の前の別名を参照しても、CMakeは生成時に解決する（試作で確認）。これにより、提供側の形式の上書き（`<Solution>_<Project>_TYPE`）を利用側のファイルに書かずに済む。
+- **形式ごとのターゲット**：ターゲット名は作成時形式が `<Solution>_<Project>`、他は接尾辞付きで固定。成果物名は通常Project名で、静的と共有を同時に作るときだけ、選択形式以外に `-static`／`-shared` を付ける（静的ライブラリとDLLのインポートライブラリの衝突を避ける）。
+- **形式の選択の一本化**：CMakeの変数は1つなので、Python側も「`project_types`、なければ `ProjectBuildSettings.project_type`」を自分の形式とし、静的／共有なら静的・共有のリンクも切り替える規則に統一した。従来、作成時形式がインターフェースのProjectに `project_types` だけを指定すると自分はインターフェースのままだった点が変わる。`project_types` と `INTERFACE_LIBRARY` の明示の併用はエラー。
+- **外部Solutionの設定の継承**：同じツリーで構成するため、`external_build_settings` がない外部Solutionは最上位の構成・アーキテクチャ・C++標準・ToolSettings・CMakeSettingsを引き継ぐ。従来は外部側が既定値（VS2022）のままで、Ninja等では互換性エラーになっていた。
+- **リンク先Solutionのファイルも書く**：取り込むProjectの生成ファイルとリンク先の入口は、最上位の操作で書き直す（依存探索ディレクトリのcloneにも書く。内容は管理JSONから決まるため、最新のcloneなら差分は出ない）。リンク先自身の依存が解決できるときは、その `CppBuildTopLevel.cmake` と残りのProjectのファイルも書き、リンク先を単独でCMakeに渡せる状態にする。解決できなければそのままにする。2026-10-03修正（レビュー指摘）：リンク先の単独利用が参照する、さらに先のリンク先（最上位の操作では使わないSolution）のファイルも再帰的に書く。Solution同士の相互リンクに備え、訪問済みのSolutionは再計算しない。同じファイルは、より上位の視点で求めた内容を優先する。
+- **保存しない設定の受け渡し**：ビルドツリー内の `cppbuild-cache.cmake` を `cmake -C` で渡し、すべての値を毎回明示する（前回の値がキャッシュに残る問題を避ける）。2026-10-02更新：CppBuildのツリーでも自動再構成は止めない（`CMAKE_SUPPRESS_REGENERATION` はOFF）。clean時の再生成禁止は、cleanのコマンド側で守る（VSはMSBuildのCleanを.vcxprojへ直接、Ninjaは `ninja -t clean`／成果物の削除。`cmake --build` はVS2026でZERO_CHECKを先に実行し再構成することを実試験で確認したため使わない）。
+- **clean**：「AppのcleanはAppだけ」という当初の合意を維持した。VSはMSBuildの `Clean`（`BuildProjectReferences=false`）。Ninjaには単一ターゲットのcleanがなく、`ninja -t clean <target>` は依存先の成果物も消すため、File APIが示す成果物とオブジェクトディレクトリを削除する。共有依存の保護（依存解決して対象外の依存を残す処理）は、CMakeが消えた依存を作り直すため廃止した。
+- **一意性の検査**：別のProjectが同じターゲット名になる場合と、同名の共有ライブラリ（DLL名の衝突）はSettingsError。同じSolution内のTEST Projectが別々の `googletest_archive` を指定した場合もエラー（FetchContentはツリーに1回）。2026-10-03：別Solutionの同名実行ファイルは、表示だけの側の出力先を分けて許す（ユーザー合意の案A）。DLL名の衝突は、出力先を分けても読み込み時に区別できないため、表示用でも従来どおりエラーとする。
+- **成果物の特定**：`file(GENERATE)` の出力ファイルをやめ、CMake File APIの成果物一覧と `nameOnDisk` を使う。
+- **残る制約**：構成は常にSolution全体で行う（他ProjectのCMakeの誤りで個別操作も失敗する）。旧Projectごとの`.cppbuild/output`は使わないが自動削除しない。M3aの試験 `tests/test_integration_candidate.py` は旧方式の技術検証の記録として残す（製品コードを使わない）。Linux/macOSでの実検証は未実施。
+
+### CMakeの推奨に照らした見直し（2026-10-02）
+
+ユーザーの依頼で、生成するCMakeと運用を一般的な推奨と照らし合わせ、無理なく直せる箇所を修正した。
+
+- 修正：GoogleTestの選択肢を `FORCE` 付きキャッシュから通常の変数へ（CMP0077、利用者の `-D` を上書きしない）。CTest標準の `BUILD_TESTING`（`option`、既定ON）を設け、OFFならTEST Projectを構成せずGoogleTestも取得しない。実行ファイル・TESTの利用要件をPUBLICからPRIVATEへ。
+- 残した非推奨・非標準の箇所（既存機能や運用の維持のため）：
+  1. 依存探索ディレクトリのclone（他リポジトリの作業ツリー）へ生成ファイルを書き込む。最新のcloneなら差分は出ない。代替は「書かずに古ければ警告・エラー」で、運用方針の判断が要る。
+  2. NinjaのProject単位cleanは、CMake内部の配置（`CMakeFiles/<target>.dir/<構成>`）を前提に削除する。Ninja標準の `-t clean <target>` は依存先も消すため、「AppのcleanはAppだけ」の合意を優先した。
+  3. （2026-10-02一部解消）標準の `BUILD_SHARED_LIBS` を全体の既定値として尊重し、Projectごとの `<Solution>_<Project>_TYPE` はライブラリ単位の上書き（`ZLIB_BUILD_SHARED` と同じ形）とした。静的と共有の同時利用（利用側ごとに別形式でリンクする既存機能）は標準にない独自の仕組みとして残る。
+  4. （2026-10-02解消）CppBuildのビルドツリーでも自動再構成を止めない。cleanが再構成を起こさないよう、全体cleanはNinjaでは `ninja -t clean`（build.ninjaを作り直さない）、VSでは `ALL_BUILD.vcxproj` へのMSBuildのClean（カスタムビルドを実行しない）、Project単位のcleanは各.vcxprojへのMSBuildのClean（参照先を処理しない）とした。CMakeのキャッシュにあるMSBuildを直接呼ぶ点は独自だが、MSBuild標準のターゲットだけを使う。
+  5. リンク先Solutionをソースツリー外から `add_subdirectory("../STL" ...)` で取り込む。外部プロジェクトは `find_package`／`FetchContent` が一般的だが、ソースごと同じ構成でビルドする方針のため。
+  6. （2026-10-02解消）別名は `::` を1つにした（`STL::Containers_static`）。
+  7. ImportedLibraryの未提供の構成は存在しないパスを指す。標準の `MAP_IMPORTED_CONFIG_<構成>` は、未提供の構成で別の構成のバイナリーを黙って使うか、マルチ構成の生成時点でエラーになるため、従来の方式を残した。2026-10-02：パスを `<ビルドディレクトリ>/cppbuild-missing/<名前>-has-no-<構成>-file` とし、リンクエラーが原因を示すようにした。
+  8. Solution間の変数（`CPPBUILD_REQUEST_<GUID>`・`CPPBUILD_REQUESTED`・`CPPBUILD_LINKED`）による取り込み範囲の受け渡しは、CppBuild独自の取り決め。2026-10-02：CppBuild以外のプロジェクトから `add_subdirectory` された場合（`CPPBUILD_LINKED` なし）は、全Projectとリンク先を最上位と同じく追加するようにした（以前は何も追加されなかった）。
+
+### 検討時の記録
+
+以下は実装前の検討記録。
+
+- 現状の障害：生成CMakeは `.cppbuild/output/...` 内にあり絶対パス。依存はIMPORTED（ビルド済みファイル参照）で、ビルド順・実行時PATHはPython側が担う。
+- 着地点：CppBuildは「普通のCMakeプロジェクトを生成・管理し、操作の窓口になる道具」とする。Solutionの入口CMakeLists.txt＋ProjectごとのCMakeLists.txt（add_subdirectory）をソースツリー内に生成し、パスは相対。ビルドツリーはSolution×生成環境ごとに1つ。個別操作は同じツリーでのターゲット指定（構成はSolution全体、ビルドは個別）。.slnはCMakeが直接生成する1つ。
+- 別Solutionのリンク：ソース取り込み（`if(NOT TARGET)`＋`EXCLUDE_FROM_ALL`）を標準とし、GUID・link_solutionの使い方は維持。Solutionをまたぐビルド結果の共用は失う（必要ならパッケージ方式を将来追加）。
+- 成果物共用の本来の目的（全体／個別の二重ビルド回避、個別更新の全体反映）は維持される。失うのは個別構成の独立性（他ProjectのCMakeエラー・構成時間の影響）。
+- 維持する条件の変更案：「Projectごとの独立CMake構成」→構成はSolution単位、「共有依存の保護」→廃止。成果物共用・ビルド設定の非保存・GUID解決・clean前の再生成禁止は維持。
+- 未決：Project単体clean（Ninja）、同一ライブラリの静的／共有の同時利用、`PROJECT_IS_TOP_LEVEL` によるProject単独入口、生成CMakeのコミット対象化、未コミットの出力先機能の扱い。
+
+### 既存APIへの影響（コード確認による机上チェック、未検証）
+
+- そのまま使える：Solution.create/open/get_project/projects/add_project/remove_project、settingsのget/save/reload、link_project/link_solution/unlink/link_package/link_cmake_source/link_imported_library、set_pch/clear_pch、ファイルテンプレート、add_file/remove_file/move_file、on/off、check_environment、dependency_directories・MissingDependenciesError、solution_folders、Solution.build/run/test/rebuildとbuild_projects/run_projects/test_projects・実行並列設定、5つのProjectType、configurationの個別指定（マルチ構成ツリーの `--config` で対応）。
+- 動くが意味・挙動が変わる：
+  - Project.update と auto_update付きファイル操作は、Solution全体を構成する。他ProjectのCMakeエラーで失敗し得る。UpdateReportのbuild_directory・solution_fileはSolutionのものになる。
+  - Project.clean／rebuild：VSはMSBuildのProject単位Clean。Ninjaは標準手段がない。共有依存の保護はなくなる。Solution.cleanのbuild_projects選択はVSのみ維持可能。
+  - architecture・cmake・toolsのProject個別指定：その生成環境のSolutionツリーで全体を構成する。
+  - cpp_standard・project_type・SolutionBuildSettings.project_types：キャッシュ変数（`-D`）に対応する。値を変えるとツリーの再構成と再コンパイルが起き、全体／個別で交互に変えると毎回再ビルドになる。
+  - info()：生成状態がProject単位で独立しなくなる。
+  - move_project：キャッシュ退避は不要になる。ただし、移動したProjectをリンクする別Solutionの生成CMakeは、そのSolutionの再生成まで古いままになる。
+  - TemplateTools：ソースツリー内の生成CMakeの除外または再生成が必要。
+  - 実行時のPATH追加は不要になる（DLLを共通出力フォルダーに集約）。
+- 機能しなくなる・制限が必要：
+  1. 同じライブラリを利用側ごとに別形式でリンクすること（App1は静的、App2は共有など）。1つのツリーでは形式がライブラリごとに1つなので、Dependency.project_typeの食い違いはエラーにする。現行は形式別ツリーで両立していた。
+  2. ProjectBuildSettings.intermediate_directory：ツリーが1つになるため意味を失う。SolutionBuildSettings.intermediate_directory（`-B`）へ一本化する。artifact_directoryは対象プロパティで残せるが、DLLの共通フォルダー集約と両立しない指定は実行時に解決できない。
+  3. ProjectBuildSettings.googletest_archive：FetchContentを入口で1回宣言するため、実質Solution単位になる。Projectごとに異なる値はエラーにする。
+  4. Solutionをまたぐビルド結果の共用：外部SolutionのProjectは、利用側ツリーで再コンパイルされる。
+  5. external_build_settings：生成環境・構成の一致はもともと条件。1つのツリーでは、外部Solution別に変えられるのはcpp_standard等の対象単位の値に限られる。
+
+### 追加検討（同日、ユーザーとの質疑）
+
+- 共有依存の保護は、IMPORTED方式で依存先の成果物を消すと、利用側のツリーから再生成できない問題への対策だった。1つのツリーではCMakeが依存先を自動で再ビルドするため、保護は不要になる（消えても再ビルドの手間だけ）。VSの個別Cleanは `BuildProjectReferences=false` で依存先を巻き込まない。
+- 形式の同時利用は、形式別ターゲットの生成で維持できる見込み（zlib/zlibstaticと同様）。要求された形式だけを生成し、ターゲット名に形式を付け、静的ライブラリと共有ライブラリの取り込み用.libが衝突しないよう出力名を分ける。project_typesによる切り替えは、リンク先ターゲットの選択（キャッシュ変数）になり、両形式のビルド結果がツリーに残るため、切り替え直しでの再コンパイルを避けられる。先の「機能しなくなる」1は撤回候補。
+- テストはProjectごとのままで、Project.testはラベルで自分のテストだけを実行する。Solution単位になるのはGoogleTest本体の取得（googletest_archive）だけ。
+- move_projectの対策案：別Solutionは個々のProjectではなく、リンク先Solutionの入口をadd_subdirectoryで取り込む。Solution内の配置変更はそのSolutionの生成ファイルだけで閉じる。入口のproject()・enable_testing・FetchContentは `PROJECT_IS_TOP_LEVEL` で分岐し、Projectは `EXCLUDE_FROM_ALL` で必要な分だけビルドする。欠点は、リンク先Solutionの無関係なProjectも構成されること。
+- Solutionをまたぐビルド結果の共用は、要件（FEATURE_REQUESTS.md）に記載がない。Projectごとのツリー方式の副産物だった可能性が高い。依存探索ディレクトリ（deps/へのclone）では、利用側ごとに別コピーになるため、もともと共用されにくい。
+
 ## 2026-10-01追加：生成領域と成果物の出力先
 
 - Projectにintermediate_directory／artifact_directory、Solution自身にintermediate_directoryを設ける。管理ファイルの場所は変更せず、Solutionからの出力先継承は行わない。

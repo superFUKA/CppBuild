@@ -1,6 +1,5 @@
 """Validate a dependency closure before generating or starting any tools."""
 from dataclasses import dataclass
-import hashlib
 
 from .models import Dependency, SettingsError
 
@@ -20,11 +19,6 @@ class Node:
     @property
     def key(self):
         return (self.project.settings._data.guid, self.settings.project_type.value)
-
-    @property
-    def label(self):
-        suffix = hashlib.sha256(str(self.project.root).encode()).hexdigest()[:12]
-        return f"{self.project.name}_{self.settings.project_type.value}_{suffix}"
 
 
 def resolve(projects, *, include_external_members=False):
@@ -55,13 +49,15 @@ def resolve(projects, *, include_external_members=False):
             project_types.setdefault(project_guid, kind)
     found = _dependency_directories({project.solution for project in projects})
     missing = {}
+    inherited = _inherited(projects[0].solution._build_settings) if projects else None
 
     def open_external(config):
         from .core import Solution
         if config not in external:
             external[config] = found[1].get(config) or Solution.open(config)
-            if config in overrides:
-                external[config].set_build_settings(overrides[config])
+            # Linked Solutions build in the same CMake tree, so they follow the top Solution's
+            # environment unless external_build_settings says otherwise.
+            external[config].set_build_settings(overrides[config] if config in overrides else inherited)
         return external[config]
 
     def locate(project, reference):
@@ -145,6 +141,14 @@ def resolve(projects, *, include_external_members=False):
                     selected = project._build_settings.project_type
                     visit(project, selected or project.settings._data.initial_type)
     return roots, ordered
+
+
+def _inherited(settings):
+    from copy import deepcopy
+    from .models import SolutionBuildSettings
+    return SolutionBuildSettings(configuration=settings.configuration, architecture=settings.architecture,
+                                 cpp_standard=settings.cpp_standard, tools=deepcopy(settings.tools),
+                                 cmake=deepcopy(settings.cmake), parallel=settings.parallel)
 
 
 def _dependency_directories(solutions):

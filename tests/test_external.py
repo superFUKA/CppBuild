@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 
@@ -32,7 +31,7 @@ class ExternalTests(unittest.TestCase):
         consumer.set_build_settings(SolutionBuildSettings(configuration="Release", external_build_settings={
             str(provider.root / ".cppbuild"): SolutionBuildSettings(configuration="Release")}))
         self.success(app.run())
-        binary = next((lib.root / ".cppbuild/output").rglob("Debug/Lib.lib"))
+        binary = next((consumer.root / ".cppbuild/output").rglob("Debug/Lib.lib"))
         original = binary.read_bytes()
         reopened = Solution.open(consumer.root / ".cppbuild").get_project("App")
         reopened.settings.unlink(linked.dependency_id)
@@ -61,12 +60,14 @@ class ExternalTests(unittest.TestCase):
         b = app.settings.link_package(CMakePackage("DemoPackage", "DemoPackage::Headers", str(package)))
         app.settings.set_pch(project_headers=["include/pch.hpp"], system_headers=["string"])
         self.success(app.run())
-        pch = list((app.root / ".cppbuild/output").rglob("*.pch"))
+        pch = list((solution.root / ".cppbuild/output").rglob("*.pch"))
         self.assertTrue(pch)
-        binary = next((app.root / ".cppbuild/output").rglob("External.lib"))
+        binary = next((solution.root / ".cppbuild/output").rglob("External.lib"))
         self.assertTrue(binary.is_file())
-        # CMake's clean covers the whole owned tree, including its private external sources.
+        # A Project clean leaves what it links; a whole clean covers the tree, including external sources.
         self.success(app.clean())
+        self.assertTrue(binary.exists())
+        self.success(solution.clean())
         self.assertFalse(binary.exists())
         self.assertTrue((source / "external.cpp").is_file())
         app.settings.clear_pch()
@@ -94,12 +95,14 @@ class ExternalTests(unittest.TestCase):
             apps.append(name)
         solution.set_build_settings(SolutionBuildSettings(build_projects=apps, run_projects=apps))
         self.success(solution.run())
-        self.assertTrue(list((lib.root / ".cppbuild/output/artifacts").rglob("Lib.lib")))
-        self.assertTrue(list(engine._artifact_directory(lib, lib._resolved_build_settings(T.SHARED_LIBRARY)).rglob("Lib.dll")))
+        tree = engine.tree(solution, solution._build_settings)[0]
+        self.assertEqual(engine.main_artifact(tree, "Demo_Lib", "Debug").name, "Lib.lib")
+        # Both kinds in one tree: the DLL's import library must not overwrite the static library.
+        shared = engine.main_artifact(tree, "Demo_Lib_shared", "Debug")
+        self.assertEqual(shared.name, "Lib-shared.dll")
         # An explicit static/shared selection on the provider unifies every such link in the build.
-        shared_output = engine._artifact_directory(lib, lib._resolved_build_settings(T.SHARED_LIBRARY))
-        self.assertTrue(shared_output.is_relative_to(self.root))
-        shutil.rmtree(shared_output)
+        shared.unlink()
         lib.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
         self.success(solution.run())
-        self.assertFalse(shared_output.exists())
+        self.assertFalse(shared.exists())
+        self.assertNotIn("Demo_Lib_shared", (tree / "Demo.sln").read_text(encoding="utf-8-sig"))

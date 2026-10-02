@@ -59,9 +59,10 @@ class DependencyTests(unittest.TestCase):
     def test_default_and_explicit_empty_selection(self):
         from cppbuild.solution_engine import _selected
         roots, _ = resolve(self.solution.projects())
-        self.assertEqual(len(_selected(self.solution, roots, "build")), 3)
+        self.assertEqual(len(_selected(self.solution, roots, "build")[0]), 3)
+        self.assertFalse(_selected(self.solution, roots, "build")[1])
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=[]))
-        self.assertEqual(_selected(self.solution, roots, "build"), [])
+        self.assertEqual(_selected(self.solution, roots, "build"), ([], True))
 
     def test_invalid_dependency_record_and_recursive_settings(self):
         from cppbuild.dependencies import decode
@@ -85,12 +86,14 @@ class DependencyTests(unittest.TestCase):
             self.assertTrue(report.success, "\n".join(p.output for p in report.processes))
 
         success(self.solution.run())
-        self.assertFalse(list((self.tool.root / ".cppbuild/output").rglob("Tool.exe")))
+        from cppbuild import engine
+        tree = engine.tree(self.solution, self.solution._build_settings)[0]
+        self.assertFalse(list(tree.rglob("Tool.exe")))
         success(self.tool.build())
-        math_lib = next((self.math.root / ".cppbuild/output").rglob("Math.lib"))
-        tool_exe = next((self.tool.root / ".cppbuild/output").rglob("Tool.exe"))
+        math_lib = engine.main_artifact(tree, "Demo_Math", "Debug")
+        tool_exe = engine.main_artifact(tree, "Demo_Tool", "Debug")
         math_bytes, tool_bytes = math_lib.read_bytes(), tool_exe.read_bytes()
-        whole_sln = self.solution._last_update.artifacts[0]
+        whole_sln = tree / "Demo.sln"
         whole_bytes = whole_sln.read_bytes()
         change = self.app.add_file("src/nested/helper.cpp", content="int helper() { return 2; }")
         self.assertTrue(change.success, str(change))
@@ -104,12 +107,14 @@ class DependencyTests(unittest.TestCase):
         success(self.solution.clean())
         self.assertEqual(math_lib.read_bytes(), math_bytes)
         self.assertEqual(tool_exe.read_bytes(), tool_bytes)
-        # Unselected App still depends on Math, so Solution clean must protect it.
+        # Cleaning a library another Project uses is allowed: CMake rebuilds it for that Project.
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=["Math"]))
         success(self.solution.clean())
+        self.assertFalse(math_lib.exists())
+        success(self.app.run())
         self.assertTrue(math_lib.exists())
         self.app.settings.unlink(link.dependency_id)
         (self.app.root / "src/main.cpp").write_text("int main() { return 0; }\n")
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=["App"], configuration="Release"))
         success(self.solution.build())
-        self.assertNotIn("dep_Math", next((self.app.root / ".cppbuild/output/intermediate").rglob("CMakeLists.txt")).read_text())
+        self.assertNotIn("Demo::Math", (self.app.root / "CMakeLists.txt").read_text())

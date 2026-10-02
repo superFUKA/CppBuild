@@ -249,7 +249,8 @@ int value();
             self.success(report)
             if kind == T.INTERFACE_LIBRARY:
                 self.assertEqual(report.artifacts, ())
-                self.assertFalse(list(project._last_update.build_directory.rglob("value.obj")))
+                # The interface target lists value.cpp for the IDE but never compiles it.
+                self.assertNotIn("value.cpp", report.processes[-1].output)
             else:
                 suffix = ".lib" if kind == T.STATIC_LIBRARY else ".dll"
                 self.assertTrue(any(p.suffix == suffix and p.is_file() for p in report.artifacts))
@@ -266,7 +267,8 @@ int value();
         self.success(self.solution.run())
         self.success(project.clean())
         from cppbuild import engine
-        self.assertFalse(list(engine._artifact_directory(project, project._resolved_build_settings(T.STATIC_LIBRARY)).rglob("Switch.lib")))
+        tree = engine.tree(self.solution, self.solution._build_settings)[0]
+        self.assertFalse(list(tree.rglob("Switch.lib")))
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
     def test_real_interface_with_invalid_cpp_migration_and_display(self):
@@ -289,9 +291,10 @@ int value();
         consumer.set_build_settings(SolutionBuildSettings(run_projects=["App"]))
         self.success(consumer.run())
         sln = consumer._last_update.artifacts[0].read_text(encoding="utf-8-sig")
-        self.assertIn("interface_library", sln)
-        self.assertNotIn("header_only", sln)
-        self.assertFalse(list(provider.root.rglob("unused.obj")))
+        self.assertIn('"Provider_Api"', sln)
+        self.assertIn('"Provider_Extra"', sln)
+        self.assertNotIn("header_only", (provider.root / "Api/CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertFalse(list(consumer.root.rglob("unused.obj")))
         loaded = Solution.open(provider.root / ".cppbuild").get_project("Api")
         self.success(loaded.clean())
         self.assertTrue((loaded.root / "src/unused.cpp").is_file())

@@ -1,6 +1,4 @@
 """Persisted, virtual solution folder layout (no filesystem moves)."""
-import hashlib
-
 from .models import SettingsError, SolutionFolderSettings
 
 
@@ -34,39 +32,3 @@ def validate(settings, projects):
             raise SettingsError("Folder placement must refer to a local Project")
         _folder(folder, nested=True, empty=True)
 
-
-def dependency_keys(roots):
-    keys = set()
-
-    def visit(node):
-        if node.key in keys:
-            return
-        keys.add(node.key)
-        for child in node.dependencies:
-            visit(child)
-
-    for node in roots:
-        visit(node)
-    return keys
-
-
-def placements(solution, nodes):
-    settings = solution.settings._data.solution_folders
-    if settings is None:
-        return {}
-    external = {n.project.solution.root: n.project.solution.settings._data.name
-                for n in nodes if n.project.solution.root != solution.root}
-    names = {}
-    for root, name in external.items():
-        # Distinct Solutions with equal names must not merge into one folder.
-        if sum(other.casefold() == name.casefold() for other in external.values()) > 1:
-            name += " (" + hashlib.sha256(str(root).encode()).hexdigest()[:12] + ")"
-        names[root] = name
-    result = {}
-    for node in nodes:
-        if node.project.solution.root == solution.root:
-            child = settings.project_folders.get(node.project.name, "")
-            result[node.key] = settings.projects + ("/" + child if child else "")
-        else:
-            result[node.key] = settings.linked_projects + "/" + names[node.project.solution.root]
-    return result

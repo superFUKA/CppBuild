@@ -59,9 +59,9 @@ def _settings(project, after, source, destination):
     build = deepcopy(project._build_settings)
     if build.googletest_archive is not None:
         build.googletest_archive = path(build.googletest_archive)
-    for field in ("intermediate_directory", "artifact_directory"):
-        setattr(build, field, _rebase(getattr(build, field), project.root / ".cppbuild",
-                                    after / ".cppbuild", source, destination))
+    if build.artifact_directory is not None:
+        build.artifact_directory = _rebase(build.artifact_directory, project.root / ".cppbuild",
+                                           after / ".cppbuild", source, destination)
     _tools(build.tools, source, destination)
     return values, build
 

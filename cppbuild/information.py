@@ -48,10 +48,10 @@ def signature(project, settings=None, seen=None):
     return (deepcopy(project.settings._data), deepcopy(settings), project._file_revision, tuple(dependencies))
 
 
-def generated(project, settings, report):
-    project._known_files = report.files
+def generated(project, settings, files, success):
+    project._known_files = tuple(files)
     project._generation_signature = signature(project, settings)
-    project._generation_state = "current" if report.success else "failed"
+    project._generation_state = "current" if success else "failed"
 
 
 def built(project, settings, artifacts, success=True):

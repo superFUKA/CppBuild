@@ -1,4 +1,4 @@
-"""Output ownership, relocation, and real linking outside the CMake binary tree."""
+"""The Solution build tree location, Project artifact directories, and real linking with custom outputs."""
 from dataclasses import replace
 import os
 import shutil
@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cppbuild import (CMakeSettings, INHERIT, ProjectBuildSettings, ProjectType as T,
+from cppbuild import (CMakeSettings, ProjectBuildSettings, ProjectType as T,
                       SettingsError, Solution, SolutionBuildSettings, TemplateTools)
-from cppbuild import engine, output_paths
+from cppbuild import engine, generators, output_paths, workspace
 
 
 class OutputPathTests(unittest.TestCase):
@@ -21,41 +21,52 @@ class OutputPathTests(unittest.TestCase):
         self.app = self.solution.add_project("App", "App", T.EXECUTABLE)
         self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
 
-    def test_defaults_independence_validation_and_nonpersistence(self):
-        before = self.app._resolved_build_settings()
+    def test_defaults_validation_and_nonpersistence(self):
+        self.assertIsNone(self.app._build_settings.artifact_directory)
+        with self.assertRaises(TypeError):
+            ProjectBuildSettings(intermediate_directory="work")
         self.solution.set_build_settings(SolutionBuildSettings(intermediate_directory="../whole"))
-        self.assertEqual(self.app._resolved_build_settings().intermediate_directory, before.intermediate_directory)
-        self.app.set_build_settings(ProjectBuildSettings(intermediate_directory="../work", artifact_directory=str(self.root / "bin")))
-        self.assertEqual(output_paths.root(self.app, self.app._build_settings.intermediate_directory), self.app.root / "work")
+        tree = engine.tree(self.solution, self.solution._build_settings)[0]
+        self.assertEqual(tree.parent, self.solution.root / "whole")
+        self.app.set_build_settings(ProjectBuildSettings(artifact_directory=str(self.root / "bin")))
         self.assertEqual(output_paths.root(self.app, self.app._build_settings.artifact_directory), self.root / "bin")
-        for field in ("intermediate_directory", "artifact_directory"):
-            for value in (None, INHERIT, "", 1, "a;bad", "$<CONFIG>", "C:relative", "bad\npath"):
-                with self.subTest(field=field, value=value), self.assertRaises(SettingsError):
-                    self.app.set_build_settings(ProjectBuildSettings(**{field: value}))
+        for value in (None, "", 1, "a;bad", "$<CONFIG>", "C:relative", "bad\npath"):
+            with self.subTest(value=value), self.assertRaises(SettingsError):
+                self.solution.set_build_settings(SolutionBuildSettings(intermediate_directory=value))
+            if value is not None:
+                with self.subTest(value=value), self.assertRaises(SettingsError):
+                    self.app.set_build_settings(ProjectBuildSettings(artifact_directory=value))
         reopened = Solution.open(self.solution.root / ".cppbuild")
         self.assertEqual(reopened._build_settings.intermediate_directory, "output/intermediate")
         self.assertEqual(reopened.get_project("App")._build_settings, ProjectBuildSettings())
-        self.assertNotIn("intermediate_directory", self.app.settings.path.read_text())
+        self.assertNotIn("artifact_directory", self.app.settings.path.read_text())
 
-    def test_shared_root_separates_projects_copies_and_types(self):
+    def test_one_tree_per_environment_and_separate_artifact_areas(self):
         library = self.solution.add_project("Library", "Library", T.STATIC_LIBRARY)
-        settings = ProjectBuildSettings(intermediate_directory=str(self.root / "shared"), artifact_directory=str(self.root / "shared"))
-        for project in (self.app, library):
-            project.set_build_settings(settings)
-        self.assertNotEqual(output_paths.area(self.app, settings.artifact_directory), output_paths.area(library, settings.artifact_directory))
-        static = library._resolved_build_settings(T.STATIC_LIBRARY)
-        shared = library._resolved_build_settings(T.SHARED_LIBRARY)
-        self.assertNotEqual(engine._locations(library, static), engine._locations(library, shared))
-        self.assertNotEqual(engine._artifact_directory(library, static), engine._artifact_directory(library, shared))
-        self.assertEqual(engine._locations(library, static), engine._locations(library, replace(static, configuration="Release")))
+        base = self.solution._build_settings
+        tree = engine.tree(self.solution, base)[0]
+        self.assertEqual(engine.tree(self.solution, replace(base, configuration="Release"))[0], tree)
+        self.assertEqual(engine.tree(self.solution, library._resolved_build_settings(T.SHARED_LIBRARY))[0], tree)
+        if os.name == "nt":
+            self.assertNotEqual(engine.tree(self.solution, replace(base, architecture="Win32"))[0], tree)
+        shared = str(self.root / "shared")
+        self.assertNotEqual(output_paths.area(self.app, shared), output_paths.area(library, shared))
         clone_path = self.root / "template"
         shutil.copytree(self.solution.root, clone_path)
         clone = Solution.open(clone_path / ".cppbuild").get_project("App")
         self.assertEqual(clone.settings.get().guid, self.app.settings.get().guid)
-        self.assertNotEqual(output_paths.area(clone, settings.artifact_directory), output_paths.area(self.app, settings.artifact_directory))
+        self.assertNotEqual(output_paths.area(clone, shared), output_paths.area(self.app, shared))
+
+    def test_artifact_directory_reaches_cmake_only_through_the_cache(self):
+        self.app.set_build_settings(ProjectBuildSettings(artifact_directory="../custom/bin"))
+        plan = workspace.plan(self.solution)
+        toolchain = generators.Toolchain("Ninja Multi-Config", None)
+        script = plan.cache_script(toolchain)
+        expected = output_paths.area(self.app, "../custom/bin", toolchain.context).as_posix()
+        self.assertIn(f'set(Demo_App_OUTPUT_DIRECTORY "{expected}" CACHE PATH "" FORCE)', script)
+        self.assertNotIn("custom", "".join(plan.documents().values()))
 
     def test_generated_leaves_excluded_from_scan_and_templates_after_reopen(self):
-        self.app.set_build_settings(ProjectBuildSettings(intermediate_directory="../custom/work", artifact_directory="../custom/bin"))
         data = self.app.settings.get()
         data.source_directories = ["."]
         self.app.settings.save(data)
@@ -71,19 +82,18 @@ class OutputPathTests(unittest.TestCase):
         self.assertFalse(list(template.rglob("generated.cpp")))
 
     def test_moving_project_preserves_external_roots_but_changes_cache_identity(self):
-        self.app.set_build_settings(ProjectBuildSettings(intermediate_directory="../../work", artifact_directory="output/artifacts"))
+        self.app.set_build_settings(ProjectBuildSettings(artifact_directory="../../work"))
         before = self.app._resolved_build_settings()
-        external = output_paths.root(self.app, before.intermediate_directory)
-        old = engine._locations(self.app, before)
-        directory = output_paths.claim(self.app, before.intermediate_directory)
+        external = output_paths.root(self.app, before.artifact_directory)
+        old = output_paths.area(self.app, before.artifact_directory)
+        directory = output_paths.claim(self.app, before.artifact_directory)
         (directory / "keep").write_text("old")
         report = self.solution.move_project("App", "nested/App", auto_update=False)
         self.assertTrue(report.success)
         after = self.app._resolved_build_settings()
-        self.assertEqual(output_paths.root(self.app, after.intermediate_directory), external)
-        self.assertNotEqual(engine._locations(self.app, after), old)
+        self.assertEqual(output_paths.root(self.app, after.artifact_directory), external)
+        self.assertNotEqual(output_paths.area(self.app, after.artifact_directory), old)
         self.assertTrue((directory / "keep").is_file())
-        self.assertEqual(after.artifact_directory, "output/artifacts")
 
 
 class OutputBuildScenario:
@@ -91,62 +101,48 @@ class OutputBuildScenario:
 
     def test_custom_output_link_run_clean_and_reconfigure(self):
         # MSBuild disables some incremental tracking beneath system TEMP.
-        workspace = Path(__file__).resolve().parents[1] / ".test-work"
-        workspace.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="out-", dir=workspace) as temporary:
+        workspace_root = Path(__file__).resolve().parents[1] / ".test-work"
+        workspace_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="out-", dir=workspace_root) as temporary:
             root = Path(temporary)
             solution = Solution.create(root / "Demo", "Demo")
             solution.set_build_settings(SolutionBuildSettings(cmake=CMakeSettings(generator=self.generator), intermediate_directory="../whole work"))
             library = solution.add_project("Library", "Library", T.STATIC_LIBRARY)
-            library.add_file("src/lib.cpp", content="#ifdef _WIN32\n__declspec(dllexport)\n#endif\nint value() { return 42; }", auto_update=False)
-            library.set_build_settings(ProjectBuildSettings(intermediate_directory="../local work", artifact_directory=str(root / "products")))
+            library.add_file("src/lib.cpp", content="int value() { return 42; }", auto_update=False)
+            library.set_build_settings(ProjectBuildSettings(artifact_directory=str(root / "products")))
             app = solution.add_project("App", "App", T.EXECUTABLE)
             app.add_file("src/main.cpp", content="int value(); int main() { return value() == 42 ? 0 : 1; }", auto_update=False)
             app.settings.link_project(library, T.STATIC_LIBRARY)
-            app.set_build_settings(ProjectBuildSettings(intermediate_directory=str(root / "work"), artifact_directory=str(root / "products")))
+            app.set_build_settings(ProjectBuildSettings(artifact_directory=str(root / "products")))
 
             def success(report):
                 self.assertTrue(report.success, "\n".join(p.output for p in report.processes))
                 return report
 
-            success(app.run())
-            lib_settings = library._resolved_build_settings()
-            _, lib_build = engine._locations(library, lib_settings)
-            lib_file = engine._outputs(library, lib_build, "Debug")["file"]
-            exe = engine._outputs(app, engine._locations(app, app._resolved_build_settings())[1], "Debug")["file"]
+            run = success(app.run())
+            build = engine.tree(solution, app._resolved_build_settings())[0]
+            self.assertTrue(build.is_relative_to(solution.root / "whole work"))
+            lib_file = engine.main_artifact(build, "Demo_Library", "Debug")
+            exe = engine.main_artifact(build, "Demo_App", "Debug")
             self.assertTrue(lib_file.is_relative_to(root / "products"))
             self.assertTrue(exe.is_relative_to(root / "products"))
+            self.assertIn(exe, run.artifacts)
             stamp = lib_file.stat().st_mtime_ns
-            success(solution.build())
+            whole = success(solution.build())
             self.assertEqual(lib_file.stat().st_mtime_ns, stamp)
-            self.assertEqual(engine._outputs(library, lib_build, "Debug")["file"], lib_file)
-            self.assertIn(lib_file, engine._artifacts(library, lib_settings, lib_build))
-            with patch("cppbuild.engine._generate", side_effect=AssertionError("clean must not configure")):
+            self.assertIn(lib_file, whole.artifacts)
+            with patch("cppbuild.engine.configure", side_effect=AssertionError("clean must not configure")):
                 success(app.clean())
             self.assertFalse(exe.exists())
             self.assertTrue(lib_file.exists())
             success(app.rebuild())
             app.set_build_settings(replace(app._build_settings, artifact_directory="../new products"))
-            success(app.clean())  # No tree yet at the newly selected output location.
-            self.assertTrue(exe.exists())
             success(app.run())
-            self.assertTrue(exe.exists())
-            new_exe = engine._outputs(app, engine._locations(app, app._resolved_build_settings())[1], "Debug")["file"]
+            new_exe = engine.main_artifact(build, "Demo_App", "Debug")
             self.assertNotEqual(exe, new_exe)
+            self.assertTrue(new_exe.is_relative_to(app.root / "new products"))
             success(app.clean())
             self.assertFalse(new_exe.exists())
-            self.assertTrue(exe.exists())
-            self.assertTrue(lib_file.exists())
-            # Switching the provider's kind still resolves its custom output and DLL path.
-            library.set_build_settings(replace(library._build_settings, project_type=T.SHARED_LIBRARY))
-            success(app.run())
-            _, shared_build = engine._locations(library, library._resolved_build_settings())
-            shared_file = engine._outputs(library, shared_build, "Debug")["file"]
-            self.assertTrue(shared_file.is_file())
-            self.assertTrue(shared_file.is_relative_to(root / "products"))
-            self.assertNotEqual(shared_file, lib_file)
-            success(app.clean())
-            self.assertTrue(shared_file.is_file())
 
 
 @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")

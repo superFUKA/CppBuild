@@ -8,7 +8,7 @@ import unittest
 from cppbuild import (Solution, SolutionFolderSettings, SolutionBuildSettings,
                       ProjectType as T, SettingsError, TemplateTools, TypeSettingsData)
 from cppbuild.graph import resolve
-from cppbuild.solution_folders import placements, dependency_keys
+from cppbuild import workspace
 
 
 class SolutionFolderTests(unittest.TestCase):
@@ -62,9 +62,13 @@ class SolutionFolderTests(unittest.TestCase):
         self.configure()
         roots, nodes = resolve(self.solution.projects(), include_external_members=True)
         self.assertEqual({n.project.name for n in nodes}, {"App", "Lib", "Unused"})
-        self.assertEqual({n.project.name for n in nodes if n.key in dependency_keys(roots)}, {"App", "Lib"})
-        folders = placements(self.solution, nodes)
-        self.assertEqual({folders[n.key] for n in nodes}, {"My Projects/Apps/Tools", "Linked Projects/External"})
+        plan = workspace.plan(self.solution)
+        display = {plan.projects[g].name for g in plan._display_guids}
+        self.assertEqual(display, {"Unused"})
+        self.assertEqual([(p.name, kinds) for p, kinds in plan.external_requests()], [("Lib", ["STATIC"]), ("Unused", ["DISPLAY"])])
+        self.assertEqual([folder for _, _, _, folder in plan.linked_solutions()], ["Linked Projects/External"])
+        entry = plan.documents()[self.solution.root / "CMakeLists.txt"]
+        self.assertIn('set(CMAKE_FOLDER "My Projects/Apps/Tools")', entry)
         self.assertEqual([p.name for p in self.solution.projects()], ["App"])
         self.assertEqual({n.project.name for n in resolve(self.solution.projects())[1]}, {"App", "Lib"})
         self.app.settings.unlink(self.link.dependency_id)
@@ -77,10 +81,12 @@ class SolutionFolderTests(unittest.TestCase):
         header.add_file("include/api.hpp", content="#pragma once", auto_update=False)
         self.lib.settings.link_solution(other.root / ".cppbuild", T.INTERFACE_LIBRARY)
         roots, nodes = resolve(self.solution.projects(), include_external_members=True)
-        folders = placements(self.solution, nodes)
-        self.assertNotEqual(folders[next(n.key for n in nodes if n.project.name == "Lib")],
-                            folders[next(n.key for n in nodes if n.project.name == "Headers")])
         self.assertEqual(len(nodes), 4)
+        linked = workspace.plan(self.solution).linked_solutions()
+        folders = [folder for _, _, _, folder in linked]
+        self.assertEqual(len(set(folders)), 2)
+        self.assertTrue(all(f.startswith("Linked Projects/External (") for f in folders))
+        self.assertEqual(sorted(binary for _, _, binary, _ in linked), ["External", "External_2"])
 
     def test_template_preserves_layout(self):
         self.configure()
@@ -128,24 +134,24 @@ class SolutionFolderTests(unittest.TestCase):
             entries = re.findall(r'Project\("\{[^}]+\}"\) = "([^"]+)", "([^"]+)", "\{([^}]+)\}"', text)
             folders = {name: guid for name, path, guid in entries if not path.endswith(".vcxproj")}
             parents = dict(re.findall(r'\{([^}]+)\} = \{([^}]+)\}', text))
-            self.assertTrue(any(path.endswith("App.vcxproj") for _, path, _ in entries))
-            self.assertTrue(any(path.endswith("Unused.vcxproj") for _, path, _ in entries))
+            self.assertTrue(any(path.endswith("Main_App.vcxproj") for _, path, _ in entries))
+            self.assertTrue(any(path.endswith("External_Unused.vcxproj") for _, path, _ in entries))
             self.assertEqual(parents[folders["Apps"]], folders["My.Projects (local)"])
             self.assertEqual(parents[folders["Tools_\u65e5\u672c\u8a9e"]], folders["Apps"])
             self.assertEqual(parents[folders["External"]], folders["Linked Projects"])
             for name, path, guid in entries:
-                if path.endswith("App.vcxproj"):
+                if path.endswith("Main_App.vcxproj"):
                     self.assertEqual(parents[guid], folders["Tools_\u65e5\u672c\u8a9e"])
-                if path.endswith("Tool.vcxproj"):
+                if path.endswith("Main_Tool.vcxproj"):
                     self.assertEqual(parents[guid], folders["My.Projects (local)"])
-                if path.endswith("Unused.vcxproj"):
+                if path.endswith("External_Unused.vcxproj"):
                     self.assertEqual(parents[guid], folders["External"])
                     self.assertNotRegex(text, re.escape("{" + guid + "}") + r"[^\n]*Build\.0")
             from cppbuild import tooling
             default = tooling.process(self.solution._build_settings,
                 ["cmake", "--build", sln.parent, "--config", configuration], self.solution.root)
             self.assertTrue(default.success, default.output)
-            self.assertFalse(list(self.unused.root.rglob("Unused.exe")))
+            self.assertFalse(list(sln.parent.rglob("Unused.exe")))
         values = self.solution.settings.get()
         values.solution_folders = None
         self.solution.settings.save(values)

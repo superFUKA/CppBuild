@@ -1,6 +1,5 @@
 """Serialization and CMake adapters for explicitly registered dependencies."""
 from dataclasses import asdict, dataclass
-from pathlib import Path
 import re
 import uuid
 
@@ -106,48 +105,3 @@ def validate(project, value, *, legacy=False):
     if not isinstance(value.project_type, ProjectType) or value.project_type not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.INTERFACE_LIBRARY}:
         raise SettingsError("Only library types can be linked")
 
-
-def cmake(project, settings, key, value, target, scope):
-    from .engine import _path, _quote
-    alias = "external_" + key
-    lines = []
-    if isinstance(value, CMakePackage):
-        directory = path(project, value.directory)
-        lines += [f"find_package({value.name} CONFIG REQUIRED PATHS {_path(directory)} NO_DEFAULT_PATH)"]
-        alias = value.target
-    elif isinstance(value, CMakeSource):
-        lines += [f"add_subdirectory({_path(path(project, value.directory))} {_quote('_external/' + key)} EXCLUDE_FROM_ALL)"]
-        alias = value.target
-    elif isinstance(value, ImportedLibrary):
-        kind = value.project_type
-        if kind == ProjectType.INTERFACE_LIBRARY:
-            lines += [f"add_library({alias} INTERFACE IMPORTED)"]
-        else:
-            if settings.configuration not in value.locations:
-                raise SettingsError("No imported artifact for selected configuration")
-            lines += [f"add_library({alias} {'STATIC' if kind == ProjectType.STATIC_LIBRARY else 'SHARED'} IMPORTED)"]
-            for config in ("Debug", "Release", "RelWithDebInfo", "MinSizeRel"):
-                # Unprovided configurations point at a deliberately missing path,
-                # never silently use another configuration's binary.
-                location = path(project, value.locations[config]) if config in value.locations else project.root / ".cppbuild/missing" / config
-                if config == settings.configuration and not location.is_file():
-                    raise SettingsError(f"Imported artifact does not exist: {location}")
-                lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_LOCATION_{config.upper()} {_path(location)})")
-                if kind == ProjectType.SHARED_LIBRARY and value.import_libraries:
-                    implib = path(project, value.import_libraries[config]) if config in value.import_libraries else project.root / ".cppbuild/missing" / (config + ".lib")
-                    if config == settings.configuration and not implib.is_file():
-                        raise SettingsError(f"Import library does not exist: {implib}")
-                    lines.append(f"set_property(TARGET {alias} PROPERTY IMPORTED_IMPLIB_{config.upper()} {_path(implib)})")
-            if kind == ProjectType.SHARED_LIBRARY and settings.configuration not in value.import_libraries:
-                # Only DLL platforms (MSVC, MinGW) link through an import library.
-                lines += ["if(CMAKE_IMPORT_LIBRARY_SUFFIX)",
-                          f"  message(FATAL_ERROR {_quote('Shared library ' + key + ' requires its import library on this platform')})",
-                          "endif()"]
-        for directory in value.include_directories:
-            lines.append(f"target_include_directories({alias} INTERFACE {_path(path(project, directory))})")
-    else:
-        return []
-    lines = [f"if(NOT TARGET {alias})", *lines, "endif()"]
-    lines += [f"if(NOT TARGET {alias})", f"  message(FATAL_ERROR {_quote('Missing external target ' + alias)})", "endif()",
-              f"target_link_libraries({target} {scope} {alias})"]
-    return lines

@@ -5,7 +5,6 @@ import xml.etree.ElementTree as ET
 
 from . import engine
 from . import tooling, information
-from .graph import resolve
 from .models import ProjectType, SettingsError
 
 
@@ -50,44 +49,46 @@ def read_results(path):
         return (), (f"Test results unavailable: {exc}",)
 
 
-def _test(root, nodes):
-    project, settings = root.project, root.settings
-    results = []
-    with engine.lock_nodes(nodes):
-        for node in nodes:
-            source, build = engine._locations(node.project, node.settings)
-            generated = engine._generate(node.project, node.settings, source, build, node.dependencies)
-            results.append(generated.process)
-            if not generated.success:
-                return TestReport(project.name, tuple(results), diagnostics=("Configure failed; tests not run",))
-            built = engine.build_node(node)
-            results.append(built)
-            information.built(node.project, node.settings, engine._artifacts(node.project, node.settings, build) if built.success else (), built.success)
-            if not built.success:
-                return TestReport(project.name, tuple(results), diagnostics=("Build failed; tests not run",))
-        try:
-            engine.check_runnable(project, settings)
-        except SettingsError as exc:
-            return TestReport(project.name, tuple(results), diagnostics=(str(exc),))
-        _, build = engine._locations(project, settings)
-        output = build / ("cppbuild-tests-" + uuid.uuid4().hex + ".xml")
-        tested = tooling.process(settings, ["ctest", "--test-dir", build, "-C", settings.configuration,
-                                 "-j", settings.test_parallel, "--output-on-failure", "--no-tests=error",
-                                 "--output-junit", output], project.root, env=engine.runtime_environment(nodes, settings))
-        results.append(tested)
-        cases, diagnostics = read_results(output)
-        return TestReport(project.name, tuple(results), cases, diagnostics)
+def _run(plan, node, build):
+    """Build one TEST Project in the configured tree and run its CTest label."""
+    project, settings = node.project, node.settings
+    name = engine.target(project, settings)
+    results = [engine.build_targets(settings, build, [name])]
+    success = results[-1].success
+    for item in engine.closure(node):
+        information.built(item.project, item.settings, engine._node_artifacts(build, item) if success else (), success)
+    if not success:
+        return TestReport(project.name, tuple(results), diagnostics=("Build failed; tests not run",))
+    try:
+        engine.check_runnable(build, settings, project.name)
+    except SettingsError as exc:
+        return TestReport(project.name, tuple(results), diagnostics=(str(exc),))
+    output = build / ("cppbuild-tests-" + uuid.uuid4().hex + ".xml")
+    # Each TEST Project labels its discovered tests with its CMake target name.
+    tested = tooling.process(settings, ["ctest", "--test-dir", build, "-C", settings.configuration, "-L", f"^{name}$",
+                             "-j", settings.test_parallel, "--output-on-failure", "--no-tests=error",
+                             "--output-junit", output], project.root,
+                             env=engine.runtime_environment(engine.closure(node), settings, build))
+    results.append(tested)
+    cases, diagnostics = read_results(output)
+    return TestReport(project.name, tuple(results), cases, diagnostics)
 
 
 def project_test(project):
     project._last_update = None
-    roots, nodes = resolve([project])
-    if roots[0].settings.project_type != ProjectType.TEST:
+    plan, node = engine.project_plan(project)
+    if node.settings.project_type != ProjectType.TEST:
         raise SettingsError("test() requires a TEST Project")
-    return _test(roots[0], nodes)
+    with plan.lock():
+        update = engine._update(plan, node)
+        if not update.success:
+            return TestReport(project.name, (update.process,), diagnostics=("Configure failed; tests not run",))
+        report = _run(plan, node, update.build_directory)
+        return TestReport(report.project, (update.process, *report.processes), report.cases, report.diagnostics)
 
 
 def solution_test(solution):
+    from .solution_engine import _prepare, _configure
     solution._last_update = None
     solution.settings.reload()
     settings = solution._build_settings
@@ -99,21 +100,20 @@ def solution_test(solution):
         return TestReport(None, diagnostics=("No TEST Projects selected",))
     if len(set(names)) != len(names) or any(n not in solution._projects for n in names):
         raise SettingsError("Invalid or duplicate test selection")
-    roots, nodes = resolve([solution.get_project(name) for name in names])
-    if any(n.settings.project_type != ProjectType.TEST for n in roots):
+    plan = _prepare(solution)
+    roots = {n.project.name: n for n in plan.roots}
+    selected = [roots[name] for name in names]
+    if any(n.settings.project_type != ProjectType.TEST for n in selected):
         raise SettingsError("Test selection must contain TEST Projects")
-    reports = []
-    for root in roots:
-        closure = set()
-        def visit(node):
-            if node.key not in closure:
-                closure.add(node.key)
-                for child in node.dependencies:
-                    visit(child)
-        visit(root)
-        report = _test(root, [node for node in nodes if node.key in closure])
-        reports.append(report)
-        if not report.success and not settings.test_continue_on_failure:
-            break
-    return TestReport(None, tuple(p for r in reports for p in r.processes),
+    with plan.lock():
+        generated, build = _configure(solution, plan)
+        if not generated.success:
+            return TestReport(None, generated.processes, diagnostics=("Configure failed; tests not run",))
+        reports = []
+        for node in selected:
+            report = _run(plan, node, build)
+            reports.append(report)
+            if not report.success and not settings.test_continue_on_failure:
+                break
+    return TestReport(None, (*generated.processes, *(p for r in reports for p in r.processes)),
                       tuple(c for r in reports for c in r.cases), projects=tuple(reports))

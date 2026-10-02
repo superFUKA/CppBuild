@@ -59,28 +59,28 @@ class GeneratorSettingsTests(unittest.TestCase):
         settings = self.app._resolved_build_settings()
         toolchain = generators.resolve(settings)
         self.assertEqual(toolchain.architecture, generators.host_architecture())
-        original = engine._locations(self.app, settings)
-        self.assertRegex(original[1].name, r"^[0-9a-f]{10}$")
+        original = engine.tree(self.solution, settings)[0]
+        self.assertRegex(original.name, r"^[0-9a-f]{10}$")
         self.app.set_build_settings(ProjectBuildSettings(architecture="Win32"))
-        self.assertNotEqual(engine._locations(self.app, self.app._resolved_build_settings()), original)
+        self.assertNotEqual(engine.tree(self.solution, self.app._resolved_build_settings())[0], original)
         self.app.set_build_settings(ProjectBuildSettings(cmake=CMakeSettings(generator="Visual Studio 18 2026", toolset="v143")))
-        changed = engine._locations(self.app, self.app._resolved_build_settings())
+        changed = engine.tree(self.solution, self.app._resolved_build_settings())[0]
         self.assertNotEqual(changed, original)
-        self.assertRegex(changed[1].name, r"^[0-9a-f]{10}$")
+        self.assertRegex(changed.name, r"^[0-9a-f]{10}$")
         command = generators.resolve(self.app._resolved_build_settings()).configure("s", "b")
         self.assertEqual(command[command.index("-T") + 1], "v143")
 
-    @unittest.skipUnless(os.name == "nt", "Visual Studio contexts are Windows-only")
-    def test_legacy_owner_marker_remains_valid_and_is_upgraded(self):
-        settings = self.app._resolved_build_settings()
-        source, build = engine._locations(self.app, settings)
-        marker = build / "cppbuild-owner.json"
-        storage.atomic_write(marker, storage.encoded({"project_root": str(self.app.root), "source": str(source),
-                                                      "architecture": "x64", "type": "executable"}))
-        self.assertTrue(engine._owned(self.app, settings, source, marker))
-        storage.atomic_write(marker, storage.encoded({"project_root": str(self.app.root), "source": str(source),
-                                                      "architecture": "Win32", "type": "executable"}))
-        self.assertFalse(engine._owned(self.app, settings, source, marker))
+    def test_tree_of_another_environment_is_refused(self):
+        self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
+        build, toolchain = engine.tree(self.solution, self.app._resolved_build_settings())
+        from cppbuild import output_paths
+        output_paths.claim(self.solution, self.solution._build_settings.intermediate_directory, toolchain.context)
+        storage.atomic_write(build / "cppbuild-owner.json", storage.encoded(
+            {"solution_root": str(self.solution.root), "environment": {"generator": "other"}}))
+        with patch("cppbuild.engine.process") as process:
+            with self.assertRaises(SettingsError):
+                self.app.update()
+        process.assert_not_called()
 
     @unittest.skipUnless(os.name == "nt", "Visual Studio contexts are Windows-only")
     def test_linked_projects_require_one_generation_environment(self):
@@ -135,22 +135,32 @@ class GeneratorSettingsTests(unittest.TestCase):
             self.assertTrue(generators.runnable(None))
             self.assertFalse(generators.runnable("ARM64"))
 
-    def test_output_roles_are_generated_for_linkable_targets(self):
+    def test_generated_files_are_relative_and_independent_of_build_settings(self):
+        from cppbuild import workspace
         self.app.add_file("src/main.cpp", content="int main() {}", auto_update=False)
         library = self.solution.add_project("Lib", "Lib", T.SHARED_LIBRARY)
         library.add_file("src/lib.cpp", content="int f() { return 1; }", auto_update=False)
-        text = engine._cmake(library, library._resolved_build_settings(), engine._scan(library))
-        self.assertIn("file=$<TARGET_FILE:Lib>", text)
-        self.assertIn("linker=$<TARGET_LINKER_FILE:Lib>", text)
-        text = engine._cmake(self.app, self.app._resolved_build_settings(), engine._scan(self.app))
-        self.assertIn("file=$<TARGET_FILE:App>", text)
-        self.assertNotIn("TARGET_LINKER_FILE", text)
-        build = self.root / "outputs"
-        build.mkdir()
-        (build / "cppbuild-outputs-Debug.txt").write_text("file=/x/libLib.so\nlinker=/x/libLib.so\n", encoding="utf-8")
-        self.assertEqual(engine._outputs(library, build, "Debug")["linker"], Path("/x/libLib.so"))
-        with self.assertRaises(SettingsError):
-            engine._outputs(library, build, "Release")
+        self.app.settings.link_project(library, T.SHARED_LIBRARY)
+        first = workspace.plan(self.solution).documents()
+        self.solution.set_build_settings(SolutionBuildSettings(
+            configuration="Release", cpp_standard=17, architecture="Win32",
+            cmake=CMakeSettings(generator="Ninja Multi-Config"), project_types={library.settings.get().guid: T.STATIC_LIBRARY}))
+        library.set_build_settings(ProjectBuildSettings(project_type=T.INTERFACE_LIBRARY, artifact_directory=str(self.root / "out")))
+        self.assertEqual(workspace.plan(self.solution).documents(), first)
+        text = "".join(first.values())
+        self.assertNotIn(str(self.root).replace("\\", "/"), text.replace("\\", "/"))
+        self.assertNotIn(str(self.root), text)
+        lib = first[library.root / "CMakeLists.txt"]
+        self.assertIn("add_library(Demo_Lib SHARED ${_cppbuild_sources})", lib)
+        self.assertIn("add_library(Demo_Lib_static STATIC ${_cppbuild_sources})", lib)
+        self.assertIn("add_library(Demo::Lib ALIAS", lib)
+        app = first[self.app.root / "CMakeLists.txt"]
+        self.assertIn("target_link_libraries(Demo_App PRIVATE Demo::Lib_shared)", app)
+        self.assertIn('OUTPUT_NAME "App"', app)
+        entry = first[self.solution.root / "CMakeLists.txt"]
+        self.assertIn('add_subdirectory("App")', entry)
+        self.assertIn("list(APPEND CPPBUILD_REQUESTED SHARED)", entry)
+        self.assertTrue(all(t.startswith("# Generated by CppBuild") for t in first.values()))
 
 
 class RenameTests(unittest.TestCase):

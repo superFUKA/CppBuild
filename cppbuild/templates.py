@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 
-from . import storage, output_paths
+from . import storage, output_paths, cmake_files
 from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, SettingsError
 
 
@@ -91,6 +91,9 @@ def _copy_tree(source, destination, *, exclude=True, skip=()):
                 raise SettingsError(f"Templates cannot contain filesystem links: {path}")
         (destination / relative).mkdir(parents=True, exist_ok=True)
         for name in files:
+            # Generated CMake files depend on names and GUIDs; the new Solution regenerates them.
+            if exclude and cmake_files.generated_file(Path(current) / name):
+                continue
             shutil.copyfile(Path(current) / name, destination / relative / name)
 
 

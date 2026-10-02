@@ -1,6 +1,50 @@
 # 実装・検証記録
 
-## 最新の現在地：2026-10-01 生成領域と成果物の出力先の指定
+## 最新の現在地：2026-10-03 コードレビュー5件の修正
+
+下記のコードレビュー5件を修正し、回帰試験を追加した。設計レビューの他の改善案（状態とロック、生成ファイル一式の事前確定など）は未着手。
+
+1. 別Solutionの同名実行ファイルの衝突：表示だけの実行ファイル・TEST・DLLを `bin/_linked/<リンク先>/<構成>` に出す（ユーザー合意の案A）。最上位が `add_subdirectory` 前に `CPPBUILD_LINKED_OUTPUT` を設定する。DLL名の衝突は表示用でも従来どおりエラー。
+2. 表示だけのProjectの依存のビルド混入：`Plan._requests` で使う側と表示側の要求を分け、表示側だけの形式は `DISPLAY_<形式>` として要求する。生成CMakeは、その形式のターゲットだけを `EXCLUDE_FROM_ALL`／`EXCLUDE_FROM_DEFAULT_BUILD` にする。最上位のメンバーへの逆参照（例：表示だけのProjectが最上位のライブラリを共有形式で要求）にも適用。
+3. INTERFACE_LIBRARYの個別build：`operate` で、依存の閉包のうちビルドできるターゲットをすべて `--target` に渡す（インターフェースのターゲットはリンク先をビルドしないため）。ファイルを持たないインターフェースでも依存を作る。
+4. リンク先の単独利用に必要な生成ファイル：`Plan.documents()` がリンク先のplanのファイルを再帰的に含める（訪問済みのSolutionは再計算しない）。
+5. 指定成果物領域：`cache_script` で `output_paths.claim()` を使い、所有マーカーを作る（`52e6ee1` の動作に戻した）。
+
+- 修正中に見つけた別の不具合：生成したTEST Projectが既定のGoogleTestのURLに `file(TO_CMAKE_PATH)` を適用し、`https://` が `https:/` になってFetchContentの取得に失敗していた（10-01の未コミット変更で混入）。以前の試験はローカルZIP（`CPPBUILD_TEST_GTEST_ARCHIVE`）で実行していたため検出されなかった。URL以外（ローカルZIPのパス）だけを変換するよう修正。
+- 試験：新規 `tests/test_linked_outputs.py`（生成内容3件と、3生成器の実試験。実試験は修正1〜3をそれぞれ外すとNinjaで失敗することを確認：`multiple rules generate bin/Debug/App.exe`、Hiddenの `#error`、Baseの.lib未生成）。`test_standalone.py`・`test_solution_folders.py` を新しい出力に合わせて更新。
+- 検証（Windows 11、CMake 4.2.3、GoogleTestはオンライン取得）：`CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1` で全185件成功、skipなし、331.1秒。その後、DLL名の検査を表示用にも戻した修正の後で通常の試験（37件skip）と `test_linked_outputs`・`test_solution_folders` の実試験が成功。利用シナリオ7件が3生成器で全PASS（`--online`、`.test-work/usage-review-*`、DLL名の検査を戻す前に実行）。
+- 未実施：Linux/macOS、VS IDEのGUI操作。変更は未コミット。
+
+## 2026-10-03 コード・設計レビュー（修正は上の節で実施）
+
+- コードレビューで5件を再現：別Solutionの同名実行ファイルの出力衝突、表示専用Projectの依存のビルド混入、INTERFACE_LIBRARYの個別buildで依存未生成のまま成功、リンク先の単独利用に必要な生成ファイル不足、指定成果物領域のマーカー欠落によるソース走査・テンプレートへの混入。
+- 設計レビューでは、Solution単位のCMake構成・設定非保存・GUID解決を維持し、操作時の構成の固定、表示とビルド参加の区別、共有ツリーの状態とロック、生成ファイル一式の公開を整理する案を提示した。詳細は[全体設計レビュー](DESIGN_REVIEW_2026-10-03.md)。提案は仕様変更の合意を意味しない。
+- 追加確認：Ninja＋MSVCでAppをビルド後、未使用のintermediate_directoryへ変更してもinfo()がcurrentのままになること、Solutionの操作ロックを保持中でもProject.cleanが成功しEXEを削除することを確認。実プロセスを競合させる試験は未実施。
+- 前回のコードレビューで既存179件成功（VS2022・VS2026・Ninjaの実ビルドを含む、skipなし）。環境の中断後、ログで完了済み153件を照合し、残り26件を実行した。ログは`.test-work/review-20261003-final-tests.log`と`.test-work/review-20261003-resumed-tests.log`。今回の設計レビューでは全件再実行はしていない。
+- 製品コードと既存テストは未変更。資料のみ追加・更新した。次の作業はユーザーの指示に応じた不具合修正・回帰試験追加。Linux/macOS・VS IDEのGUIは引き続き未検証。
+
+## 最新の現在地：2026-10-01 CppBuildなしで使えるCMakeファイルの生成
+
+ユーザー合意により、Projectごとの独立CMake構成をやめ、Solutionとリンク先を1つのCMakeプロジェクトとして生成する方式へ移行した。生成ファイルだけで、CppBuildなしに構成・ビルド・.sln生成・実行・テストできる。仕様は [API設計](API_DESIGN.md) 冒頭、使い方は [利用手順](USAGE.md#generated-cmake)、判断は [設計整理メモ](DESIGN_NOTES.md) の「2026-10-01実装」。
+
+- 新規 `cppbuild/cmake_files.py`：Solutionの `CMakeLists.txt`・`CppBuildTopLevel.cmake` と各Projectの `CMakeLists.txt` を、相対パス・決定的な内容で生成する。CppBuildが生成していない同名ファイルは上書きしない。
+- 新規 `cppbuild/workspace.py`：Solution全体の依存解決、リンク先Projectへの形式の要求、リンク先Solutionの取り込み、保存しない設定の初期キャッシュ（`cmake -C`）、一意性・ソース・ImportedLibraryの事前検査。
+- `engine.py`／`solution_engine.py`／`testing.py`：Solution・生成環境ごとの1ツリーを構成し、Projectはターゲット指定でビルド・実行・テスト（CTestラベル）する。成果物はCMake File APIで特定する。IMPORTED参照、`include_external_msproject`、`cppbuild_selected`、Pythonでの依存順ビルド、`cppbuild-outputs-*.txt` を削除した。
+- clean：Projectは対象ターゲットだけ（VSはMSBuild Clean、Ninjaは成果物とオブジェクトディレクトリの削除）。Solutionは選択なしで `--target clean`。共有依存の保護は廃止。
+- 設定：`ProjectBuildSettings.intermediate_directory` を削除、`artifact_directory` の既定を `None` に変更。外部Solutionは `external_build_settings` がなければ最上位の構成・環境を引き継ぐ。形式の選択は「`project_types`、なければ `ProjectBuildSettings.project_type`」に一本化。
+- テンプレートは生成したCMakeファイルを除外し、ソース走査・ファイル操作も対象外にする。Project移動ではキャッシュの退避が不要になった（旧仕様の`.cppbuild/generated`・`build`の退避は維持）。
+- 試作（CMake 4.2.3・VS2022）で確認したこと：`::` を2つ含む別名と定義前の別名の参照、`PROJECT_IS_TOP_LEVEL` による取り込み時の分岐、MSBuildの単一Project Clean、Ninjaの `-t clean` が依存先も消すこと、VSでは `add_subdirectory(... EXCLUDE_FROM_ALL)` のターゲットが.slnから消えること（ターゲット単位の除外で表示を維持）。
+- 検証（Windows 11、VS2022・VS2026・Ninja＋MSVC、CMake 4.2.3）：
+  - 試験の更新：既存試験を新しい配置・名前に合わせて更新（clean・出力先・生成器・依存・外部・形式・移動・テスト）。新規 `tests/test_standalone.py`（生成内容の決定性・相対パス・リンク先からの逆参照、3生成器で「CppBuildで実行→`.cppbuild`を除いて別の場所へコピー→素のcmakeでECSとリンク先STLそれぞれを構成・ビルド・CTest・実行」）。
+  - `CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1`：全179件成功、skipなし、266.8秒。フラグなしでは通常の試験が成功（34件skip）。
+  - 2026-10-02追加：CMakeの推奨に合わせ、GoogleTestの選択肢を通常の変数へ、`BUILD_TESTING` の切り替えを追加、実行ファイルの利用要件をPRIVATEへ変更（残した非推奨箇所は設計整理メモに列挙）。`BUILD_TESTING=OFF` でGoogleTestを取得しないことを3生成器の実試験で確認。再検証で全179件成功（skipなし、277.3秒）、利用シナリオ7件が3生成器で全PASS（`.test-work/usage-final2-*`）。
+  - 2026-10-02追加2：CppBuild以外のCMakeプロジェクトから `add_subdirectory` した場合に全Projectとリンク先を追加、別名を `<Solution>::<Project>_<形式>` に変更、`BUILD_SHARED_LIBS` を既定値として尊重、ImportedLibraryの未提供構成の名前を自己説明的に、CppBuildのツリーでも自動再構成を有効化。cleanは再構成を起こさないよう、VSは.vcxprojへMSBuildのCleanを直接（`cmake --build` はVS2026でZERO_CHECKを先に実行し再構成することを実試験で確認）、Ninjaの全体cleanは `ninja -t clean` にした。外部プロジェクトからの取り込み・`BUILD_SHARED_LIBS`・cleanで再構成しないことを3生成器の実試験に追加。全179件成功（skipなし、302.5秒）、利用シナリオ7件が3生成器で全PASS（`.test-work/usage-final4-*`）。途中の1回の全体実行で、生成直後の実行ファイルを開けないリンクエラー（LNK1104/LNK1168、別プロセスによるファイルの一時的なロック）が2件出たが、単独の再実行（2回）と全体の再実行で成功した。
+  - 利用シナリオ：既存6件と新規 `standalone` が、VS2022・Ninja・VS2026で全PASS（`.test-work/usage-cmake-*`、`standalone` は試験側の確認条件を修正後に `.test-work/usage-standalone-*` で再実行）。
+  - 例：`examples.google_test`・`complete_workflow`・`independent_project` が成功。`independent_project` はリダイレクト先がcp932のとき、MSBuild出力の置換文字を表示できずに例外になる（`PYTHONIOENCODING=utf-8` で成功。今回の変更とは無関係の表示の問題）。
+- 振る舞いの変更（利用側への影響）：構成は常にSolution全体（他ProjectのCMakeの誤りで個別操作も失敗する）。ターゲット名・.vcxproj名が `<Solution>_<Project>` になる。静的と共有を同時に使うと、選択形式以外の成果物名に `-static`／`-shared` が付く。Solutionをまたいでビルド結果を共用しない（利用側のツリーでコンパイルする）。
+- 未実施：Linux/macOSでの確認、VS IDEのGUI操作での確認。今回の変更は未コミット。出力先指定は `52e6ee1` でコミット済み。
+
+## 2026-10-01 生成領域と成果物の出力先の指定（同日、上の方式で一部を置き換え）
 
 非保存の出力先指定を実装した。仕様は [API設計](API_DESIGN.md)・[設定詳細](SETTINGS_DESIGN.md)・[更新・ビルド詳細案](BUILD_DESIGN.md) の2026-10-01追加節、判断は [設計整理メモ](DESIGN_NOTES.md)、使い方は [利用手順](USAGE.md#output-directories) を参照。
 

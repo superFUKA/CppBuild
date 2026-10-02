@@ -106,9 +106,14 @@ class VS2022Tests(unittest.TestCase):
         self.assertEqual([p.name for p in project._last_update.files], ["new.cpp"])
 
     def test_real_configure_failure_returns_report(self):
-        # CMake reserves this target name; this exercises a real configure error.
-        project = self.solution.add_project("Reserved", "all", T.EXECUTABLE)
+        # A linked CMake source that stops configuration exercises a real configure error.
+        project = self.solution.add_project("Broken", "Broken", T.EXECUTABLE)
         project.add_file("src/main.cpp", content="int main() {}", auto_update=False)
+        broken = self.solution.root / "broken-source"
+        broken.mkdir()
+        (broken / "CMakeLists.txt").write_text("message(FATAL_ERROR configure_failure)\n")
+        from cppbuild import CMakeSource
+        project.settings.link_cmake_source(CMakeSource(str(broken), "Broken"))
         report = project.build()
         self.assertFalse(report.success)
         self.assertEqual(len(report.processes), 1)

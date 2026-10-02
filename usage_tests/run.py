@@ -4,6 +4,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from enum import Enum
 import json
+import os
 from pathlib import Path
 import time
 import traceback
@@ -143,7 +144,8 @@ def libraries(s):
         s.report(configuration + ' whole solution build', solution.build())
         result = s.report(configuration + ' static and shared consumers', solution.run())
         s.check(configuration + ' both answers', sum(p.output.strip() == '42' for p in result.processes) == 2)
-    binary = next((dual.root / '.cppbuild/output').rglob('Release/Math.dll'))
+    # Both kinds coexist in one tree; the DLL beside the static library is named Math-shared.
+    binary = next((solution.root / '.cppbuild/output').rglob('Release/Math*.dll'))
     before = binary.read_bytes()
     s.report('consumer only clean', solution.get_project('SharedApp').clean())
     s.check('dependency DLL survives', binary.read_bytes() == before)
@@ -168,12 +170,12 @@ def external(s):
         s.report(configuration + ' external solution', consumer.run())
     consumer.settings.unlink(link.dependency_id)
     imported = consumer.settings.link_imported_library(ImportedLibrary(T.STATIC_LIBRARY, {
-        config: str(next((library.root / '.cppbuild/output').rglob(config + '/Vendor.lib')))
+        config: str(next((solution.root / '.cppbuild/output').rglob(config + '/Vendor.lib')))
         for config in ['Debug', 'Release']}))
     s.report('imported Release library', consumer.run())
     consumer = Solution.open(solution.root / '.cppbuild').get_project('Client')
     s.report('imported Debug after reopen', consumer.run())
-    binary = next((library.root / '.cppbuild/output').rglob('Debug/Vendor.lib'))
+    binary = next((solution.root / '.cppbuild/output').rglob('Debug/Vendor.lib'))
     before = binary.read_bytes()
     s.report('clean imported consumer', consumer.clean())
     s.check('imported binary untouched', before == binary.read_bytes())
@@ -191,7 +193,7 @@ def external(s):
     add(consumer, 'include/pch.hpp', '#pragma once\n#include <vector>\n')
     consumer.settings.set_pch(project_headers=['include/pch.hpp'], system_headers=['string'])
     s.report('CMake source package and PCH', consumer.run())
-    s.check('PCH produced', bool(list((consumer.root / '.cppbuild/output').rglob('*.pch'))))
+    s.check('PCH produced', bool(list((solution.root / '.cppbuild/output').rglob('*.pch'))))
     consumer.settings.clear_pch()
     s.report('without PCH', consumer.rebuild())
     for dependency in [a, b]:
@@ -300,7 +302,69 @@ def testing(s):
     s.report('whole solution selected test build', solution.build())
 
 
-SCENARIOS = {f.__name__: f for f in [lifecycle, libraries, external, execution, templates, testing]}
+def standalone(s):
+    """The generated CMake files alone: copied elsewhere without .cppbuild, configured by plain cmake."""
+    import shutil
+    import subprocess
+    from cppbuild import generators
+    stl = Solution.create(s.root / 'Work/STL', 'STL')
+    containers = stl.add_project('Containers', 'Containers', T.STATIC_LIBRARY)
+    add(containers, 'include/containers.hpp', '#pragma once\nint containers();\n')
+    add(containers, 'src/containers.cpp', '#include "containers.hpp"\nint containers() { return 40; }\n')
+    tests = stl.add_project('Tests', 'Tests', T.TEST)
+    add(tests, 'src/test.cpp', '#include <gtest/gtest.h>\n#include "containers.hpp"\nTEST(STL, Containers) { EXPECT_EQ(containers(), 40); }\n')
+    tests.settings.link_project(containers, T.STATIC_LIBRARY)
+    ecs = Solution.create(s.root / 'Work/ECS', 'ECS')
+    data = ecs.settings.get()
+    data.dependency_directories = ['deps']
+    ecs.settings.save(data)
+    shutil.move(str(stl.root), str(ecs.root / 'deps/STL'))
+    stl = Solution.open(ecs.root / 'deps/STL/.cppbuild')
+    core = ecs.add_project('Core', 'Core', T.STATIC_LIBRARY)
+    add(core, 'src/core.cpp', '#include "containers.hpp"\nint core() { return containers() + 2; }\n')
+    core.settings.link_solution(stl.root / '.cppbuild', T.STATIC_LIBRARY)
+    application = app(ecs, 'App', 'std::cout << core() << "\\n"; return core() == 42 ? 0 : 1;')
+    source = application.root / 'src/main.cpp'
+    source.write_text('int core();\n' + source.read_text(encoding='utf-8'), encoding='utf-8')
+    application.settings.link_project(core, T.STATIC_LIBRARY)
+    checks = ecs.add_project('Tests', 'Tests', T.TEST)
+    add(checks, 'src/test.cpp', '#include <gtest/gtest.h>\nint core();\nTEST(ECS, Core) { EXPECT_EQ(core(), 42); }\n')
+    checks.settings.link_project(core, T.STATIC_LIBRARY)
+    checks.set_build_settings(ProjectBuildSettings(googletest_archive=s.archive))
+    ecs.set_build_settings(settings(test_projects=['Tests']))
+    s.report('CppBuild whole test', ecs.test())
+    from cppbuild.cmake_files import generated_file
+    def generated():
+        # The build tree below .cppbuild holds third-party CMake files (GoogleTest); only CppBuild's count.
+        return {p: p.read_bytes() for p in ecs.root.rglob('*') if '.cppbuild' not in p.parts and generated_file(p)}
+    first = generated()
+    expected = [ecs.root / 'CMakeLists.txt', ecs.root / 'CppBuildTopLevel.cmake', stl.root / 'CMakeLists.txt',
+                stl.root / 'CppBuildTopLevel.cmake', *(p.root / 'CMakeLists.txt' for p in [*ecs.projects(), *stl.projects()])]
+    s.check('generated files written', set(first) == set(expected))
+    s.report('CppBuild update again', ecs.update())
+    s.check('generated files are stable', first == generated())
+    s.check('generated files have no absolute paths',
+            not any(str(s.root).replace('\\', '/') in p.read_text(encoding='utf-8').replace('\\', '/') for p in first))
+    copy = s.root / 'Copy'
+    shutil.copytree(ecs.root, copy, ignore=lambda directory, names: [n for n in names if n == '.cppbuild'])
+    toolchain = generators.resolve(settings())
+    url = ['-DCPPBUILD_GOOGLETEST_URL=' + s.archive] if s.archive else []
+    for name, root, build, configuration in [('ECS', copy, s.root / 'plain', 'Release'),
+                                              ('STL', copy / 'deps/STL', s.root / 'plain-stl', 'Debug')]:
+        for step, command in [('configure', [*toolchain.configure(root, build), *url]),
+                              ('build', ['cmake', '--build', build, '--config', configuration]),
+                              ('ctest', ['ctest', '--test-dir', build, '-C', configuration, '--output-on-failure'])]:
+            result = subprocess.run([str(c) for c in command], env=toolchain.env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, errors='replace')
+            s.record(f'plain {name} {step}', {'command': [str(c) for c in command], 'returncode': result.returncode,
+                                              'output': result.stdout[-4000:]})
+            s.check(f'plain {name} {step} succeeded', result.returncode == 0)
+    executable = s.root / ('plain/bin/Release/App.exe' if os.name == 'nt' else 'plain/bin/Release/App')
+    result = subprocess.run([str(executable)], stdout=subprocess.PIPE, text=True)
+    s.check('plain executable runs', result.returncode == 0 and result.stdout.strip() == '42')
+
+
+SCENARIOS = {f.__name__: f for f in [lifecycle, libraries, external, execution, templates, testing, standalone]}
 
 
 def main():
@@ -316,8 +380,8 @@ def main():
     args = parser.parse_args()
     ENVIRONMENT.update(cmake=CMakeSettings(generator=args.generator, toolset=args.toolset), architecture=args.architecture)
     selected = args.scenario or list(SCENARIOS)
-    if 'testing' in selected and not (args.gtest_archive or args.online):
-        parser.error('testing requires --gtest-archive ZIP or --online; no silent skips')
+    if {'testing', 'standalone'} & set(selected) and not (args.gtest_archive or args.online):
+        parser.error('testing and standalone require --gtest-archive ZIP or --online; no silent skips')
     archive = str(args.gtest_archive.resolve()) if args.gtest_archive else None
     if archive and not Path(archive).is_file():
         parser.error('GoogleTest archive does not exist')

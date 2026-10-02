@@ -10,6 +10,8 @@
 
 実装開始後の追加資料：
 
+- [DESIGN_REVIEW_2026-10-03.md](DESIGN_REVIEW_2026-10-03.md)：実装全体の設計レビュー。維持する設計、共有ツリー・依存範囲・生成処理の改善案、追加確認結果。提案であり、仕様変更や修正の完了を意味しない。
+
 - [CROSS_PLATFORM_PLAN.md](CROSS_PLATFORM_PLAN.md)：次の開発テーマ。生成器・コンパイラ切り替えのAPI案、判断事項、実装順序、完了条件。
 
 - [CROSS_PLATFORM_REVIEW.md](CROSS_PLATFORM_REVIEW.md)：Windows依存の調査と非Windows対応の方針案。未実装・他OS未検証。

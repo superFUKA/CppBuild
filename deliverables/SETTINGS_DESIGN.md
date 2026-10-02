@@ -2,6 +2,8 @@
 
 ## 2026-10-01追加：出力先の非保存設定
 
+> 同日更新：SolutionごとのCMakeプロジェクト化により、`ProjectBuildSettings.intermediate_directory` は廃止し、ビルドツリーは`SolutionBuildSettings.intermediate_directory`だけで決める。`ProjectBuildSettings.artifact_directory`の既定は`None`（CMakeの既定の配置）。保存しない設定はCMakeの初期キャッシュ（`cmake -C`）で渡し、生成するCMakeファイルには書かない。外部Solutionは`external_build_settings`がなければ最上位の構成・環境・C++標準・ToolSettingsを引き継ぐ。詳細は[API設計](API_DESIGN.md)冒頭。
+
 - ProjectBuildSettingsに`intermediate_directory="output/intermediate"`と`artifact_directory="output/artifacts"`を追加。SolutionBuildSettingsは`intermediate_directory="output/intermediate"`だけを持つ。
 - 出力先の継承・Solutionによる所属Projectの一括設定は設けない。INHERITとNoneは不可。既存のconfiguration・architecture・cpp_standard・tools・cmakeの継承は維持する。
 - 相対パスは設定対象自身の`.cppbuild`基準。`..`と絶対パスを受け付け、ドライブ相対パス・空文字・CMakeで文字列として扱えない値は拒否する。

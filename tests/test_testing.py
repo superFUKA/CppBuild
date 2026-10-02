@@ -110,10 +110,17 @@ class TestControlTests(unittest.TestCase):
         library.settings.save(data)
         self.solution.add_project("Other", "Other", T.TEST)
         calls = []
-        def fake(root, nodes):
-            calls.append(root.project.name)
-            return testing.TestReport(root.project.name, diagnostics=("failure",))
-        with patch.object(testing, "_test", side_effect=fake):
+        def fake(plan, node, build):
+            calls.append(node.project.name)
+            return testing.TestReport(node.project.name, diagnostics=("failure",))
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from cppbuild.graph import Node
+        def prepare(solution):
+            roots = [Node(p, p._resolved_build_settings(), []) for p in solution.projects()]
+            return SimpleNamespace(roots=roots, lock=nullcontext)
+        configured = (engine.OperationReport((engine.ProcessReport(("cmake",), 0, ""),)), self.root)
+        with patch.object(testing, "_run", side_effect=fake),                 patch("cppbuild.solution_engine._prepare", side_effect=prepare),                 patch("cppbuild.solution_engine._configure", return_value=configured):
             self.solution.test()
             self.assertEqual(calls, ["Other", "Tests"])
             calls.clear()

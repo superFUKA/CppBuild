@@ -1,8 +1,14 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-03）
+
+- **コードレビュー5件を修正（未コミット）**：表示だけのProjectの出力先分離（同名実行ファイルの衝突、ユーザー合意の案A）、表示側の依存要求を `DISPLAY_<形式>` に分けて既定ビルドから除外、INTERFACE_LIBRARYの個別buildで依存の閉包をビルド、リンク先の単独利用に必要な生成ファイルを再帰的に生成、指定成果物領域の所有マーカー。修正中に、既定のGoogleTest URLが `file(TO_CMAKE_PATH)` で壊れていた不具合も修正（以前はローカルZIPで試験していて未検出）。DLL名の衝突は表示用でもエラーのまま。全185件成功（3生成器の実ビルド、skipなし、オンライン取得、331.1秒）、利用シナリオ7件が3生成器で全PASS。設計レビューの他の改善案（状態・ロック、生成ファイル一式の事前確定）は未着手。次の作業はユーザーの指示に応じたコミット（日本語）。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+- **コード・設計レビュー完了**（上の項目で5件は修正済み）：コードレビューで5件の不具合を再現。設計レビューで、ビルドツリー変更がinfo()へ反映されないことと、Solutionの操作ロック中でもProject.cleanが実行できることを追加確認した。基本方針は維持し、共有ツリーの状態・ロック、表示とビルド参加、生成対象の確定と公開を整理する案を[全体設計レビュー](deliverables/DESIGN_REVIEW_2026-10-03.md)へ記載。提案は仕様変更の合意を意味しない。前回の全179件は成功（中断後に残り26件を実行、skipなし）。今回は追加のNinja実ビルドによる設計確認のみで、全件再実行・製品コードの修正・コミットはしていない。次はユーザーの指示に応じた修正と回帰試験追加。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+
 ## 最新の追加（2026-10-01）
 
-- **出力先の指定（未コミット）**：非保存の `ProjectBuildSettings.intermediate_directory`／`artifact_directory` と `SolutionBuildSettings.intermediate_directory`。既定は `.cppbuild/output/{intermediate,artifacts}/<10桁の識別子>/`。旧 `.cppbuild/generated`・`.cppbuild/build` は使わない。全173件成功（実ビルド31件・skipなし、317.017秒）、利用シナリオは3生成器で全PASS。詳細は実装記録の最新節、使い方は利用手順の「出力先の指定」。次の作業はユーザーの指示に応じたコミット（日本語）。
+- **CppBuildなしで使えるCMakeファイルの生成（未コミット）**：Solution・ProjectのディレクトリにCMakeLists.txt（とSolutionの`CppBuildTopLevel.cmake`）を生成し、Solutionとリンク先を1つのCMakeプロジェクトとして扱う。ビルドツリーはSolution・生成環境ごとに1つで、個別操作はターゲット指定。生成ファイルだけで素のcmakeによる構成・ビルド・テスト・実行ができる（3生成器で確認）。全179件成功（skipなし、302.5秒）、利用シナリオ7件が3生成器で全PASS。CMakeの推奨に照らして直した点と残した非推奨箇所は設計整理メモの「2026-10-01実装」節。詳細は実装記録の最新節、使い方は利用手順の冒頭。次の作業はユーザーの指示に応じたコミット（日本語）。
+- **出力先の指定（`52e6ee1` でコミット済み、上記で一部置き換え）**：非保存の `ProjectBuildSettings.intermediate_directory`／`artifact_directory` と `SolutionBuildSettings.intermediate_directory`。既定は `.cppbuild/output/{intermediate,artifacts}/<10桁の識別子>/`。旧 `.cppbuild/generated`・`.cppbuild/build` は使わない。全173件成功（実ビルド31件・skipなし、317.017秒）、利用シナリオは3生成器で全PASS。詳細は実装記録の最新節、使い方は利用手順の「出力先の指定」。次の作業はユーザーの指示に応じたコミット（日本語）。
 - **依存探索ディレクトリとリンク形式の切り替え**：`c2a6778` でコミット済み。`dependency_directories` による依存の自動解決、`MissingDependenciesError`、静的⇔共有の切り替え。手動の参照登録（pin）と依存解決結果の取得は取り下げ。
 
 ## 最新の現在地・次の作業（2026-09-30）
@@ -23,12 +29,12 @@
   1. ユーザーの指示に応じてコミットする（メッセージは日本語）。
   2. Linux/macOS・clang-clでの実検証。
   3. 単一構成の生成器・Xcodeへの拡張。
-- **維持する条件**：
-  - Projectごとの独立CMake構成
-  - 同一生成環境での全体／個別の成果物共用
-  - ビルド設定の非保存
+- **維持する条件**（2026-10-01更新、ユーザー合意）：
+  - Solutionとリンク先を1つのCMakeプロジェクトとして生成し、生成ファイルだけでCppBuildなしに使えること（相対パス・決定的・保存しない設定を含まない）。※旧「Projectごとの独立CMake構成」は撤回
+  - 同一生成環境での全体／個別の成果物共用（Solutionの1ツリー）
+  - ビルド設定の非保存（CMakeへは初期キャッシュで渡す）
   - GUIDによる依存解決
-  - clean前の再生成禁止と共有依存の保護
+  - clean前の再生成禁止と、Projectのcleanはそのターゲットだけ。※旧「共有依存の保護」は廃止（CMakeが作り直す）
 - **作業ツリー**：既存の `relocation-check-l3g0bdd1/` はアクセス問題のある未追跡ディレクトリ。作業に含めず、削除・コミットしない。
 
 以下は過去の進捗・設計整理の記録。次の作業は上記と対応計画を優先する。

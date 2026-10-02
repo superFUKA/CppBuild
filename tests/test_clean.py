@@ -1,4 +1,5 @@
-"""Clean uses existing owned trees, without configuring or building dependencies."""
+"""Clean uses the existing owned Solution tree, without configuring or resolving dependencies."""
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -6,7 +7,21 @@ import unittest
 from unittest.mock import patch
 
 from cppbuild import ProjectBuildSettings, ProjectType as T, Solution, SolutionBuildSettings
-from cppbuild import engine, storage
+from cppbuild import engine, generators, storage
+
+
+def fake_codemodel(build, names, configurations=("Debug",)):
+    """A minimal CMake File API reply listing targets, as a configured tree has."""
+    reply = build / ".cmake/api/v1/reply"
+    reply.mkdir(parents=True, exist_ok=True)
+    targets = []
+    for name in names:
+        (reply / f"target-{name}.json").write_text(json.dumps({"name": name, "artifacts": [], "paths": {"build": "."}}))
+        targets.append({"name": name, "jsonFile": f"target-{name}.json"})
+    (reply / "codemodel-v2-test.json").write_text(json.dumps(
+        {"configurations": [{"name": c, "targets": targets} for c in configurations]}))
+    (reply / "index-test.json").write_text(json.dumps(
+        {"reply": {"client-cppbuild": {"codemodel-v2": {"jsonFile": "codemodel-v2-test.json"}}}}))
 
 
 class CleanTests(unittest.TestCase):
@@ -17,12 +32,20 @@ class CleanTests(unittest.TestCase):
         self.solution = Solution.create(self.root / "Demo", "Demo")
         self.app = self.solution.add_project("App", "App", T.EXECUTABLE)
 
-    def owned_tree(self, project):
-        settings = project._resolved_build_settings()
-        source, build = engine._locations(project, settings)
-        storage.atomic_write(build / "cppbuild-owner.json", storage.encoded(engine._owner(project, settings, source)))
-        (build / "CMakeCache.txt").write_text("test cache")
-        (build / f"{project.name}.sln").write_text("test solution")
+    def owned_tree(self, *names):
+        build, toolchain = engine.tree(self.solution, self.solution._build_settings)
+        storage.atomic_write(build / "cppbuild-owner.json", storage.encoded(engine._owner(self.solution, toolchain)))
+        msbuild = self.root / "VS/MSBuild/Current/Bin/amd64/MSBuild.exe"
+        msbuild.parent.mkdir(parents=True, exist_ok=True)
+        msbuild.write_text("fake")
+        (build / "CMakeCache.txt").write_text(f"CMAKE_GENERATOR_INSTANCE:INTERNAL={(self.root / 'VS').as_posix()}\n"
+                                              "CMAKE_GENERATOR_PLATFORM:INTERNAL=x64\n")
+        (build / f"Demo{toolchain.solution_suffix or ''}").write_text("test solution")
+        (build / "build.ninja").write_text("test ninja")
+        names = names or ("Demo_App",)
+        for name in (*names, "ALL_BUILD"):
+            (build / f"{name}.vcxproj").write_text("test project")
+        fake_codemodel(build, names)
         return build
 
     def success(self, report):
@@ -36,7 +59,7 @@ class CleanTests(unittest.TestCase):
                 self.assertIn("Nothing to clean", result.processes[0].output)
                 self.assertEqual(result.processes[0].command, ())
         process.assert_not_called()
-        self.assertFalse((self.app.root / ".cppbuild/output").exists())
+        self.assertFalse((self.solution.root / ".cppbuild/output").exists())
         self.assertFalse(list(self.solution.root.rglob("CMakeLists.txt")))
 
     def test_empty_solution_selection_is_success(self):
@@ -46,22 +69,24 @@ class CleanTests(unittest.TestCase):
         process.assert_not_called()
 
     def test_unowned_or_incomplete_tree_fails_without_modification(self):
-        build = self.owned_tree(self.app)
-        for filename in ("App.sln", "CMakeCache.txt", "cppbuild-owner.json"):
+        build = self.owned_tree()
+        suffix = generators.resolve(self.solution._build_settings).solution_suffix
+        generated = f"Demo{suffix}" if suffix else "build.ninja"
+        for filename in (generated, "CMakeCache.txt", "cppbuild-owner.json"):
             with self.subTest(filename=filename):
                 path = build / filename
                 original = path.read_bytes()
                 path.unlink()
-                before = {p: p.read_bytes() for p in build.iterdir()}
+                before = {p: p.read_bytes() for p in build.iterdir() if p.is_file()}
                 with patch("cppbuild.engine.process") as process:
                     report = self.app.clean()
                 self.assertFalse(report.success)
                 process.assert_not_called()
-                self.assertEqual(before, {p: p.read_bytes() for p in build.iterdir()})
+                self.assertEqual(before, {p: p.read_bytes() for p in build.iterdir() if p.is_file()})
                 path.write_bytes(original)
 
     def test_wrong_owner_and_invalid_marker_are_reported(self):
-        build = self.owned_tree(self.app)
+        build = self.owned_tree()
         for content in ('{}', 'invalid json'):
             with self.subTest(content=content):
                 (build / "cppbuild-owner.json").write_text(content)
@@ -69,56 +94,56 @@ class CleanTests(unittest.TestCase):
                     self.assertFalse(self.app.clean().success)
                 process.assert_not_called()
 
-    def test_missing_selected_external_dependency_does_not_block_clean(self):
+    def test_missing_external_dependency_does_not_block_clean(self):
         provider = Solution.create(self.root / "Provider", "Provider")
         provider.add_project("Lib", "Lib", T.STATIC_LIBRARY)
         self.app.settings.link_solution(provider.root / ".cppbuild", T.STATIC_LIBRARY)
         provider.settings.path.rename(provider.settings.path.with_suffix(".offline"))
-        self.owned_tree(self.app)
-        for owner in (self.app, self.solution):
-            with self.subTest(owner=type(owner).__name__), patch("cppbuild.engine._generate") as generate:
-                with patch("cppbuild.tooling.process", return_value=engine.ProcessReport(("cmake",), 0, "cleaned")) as process:
+        self.owned_tree()
+        visual_studio = generators.resolve(self.solution._build_settings).visual_studio
+        for owner, whole in ((self.app, False), (self.solution, True)):
+            with self.subTest(owner=type(owner).__name__), patch("cppbuild.engine.configure") as configure:
+                with patch("cppbuild.tooling.process", return_value=engine.ProcessReport(("cmake",), 0, "cleaned")) as tool, \
+                        patch("cppbuild.engine.process", return_value=engine.ProcessReport(("ninja",), 0, "cleaned")) as native:
                     self.success(owner.clean())
-                generate.assert_not_called()
-                self.assertEqual(process.call_count, 1)
-                command = process.call_args.args[1]
-                self.assertEqual(command[command.index("--target") + 1], "clean")
-                self.assertNotIn("-S", command)
+                configure.assert_not_called()
+                # Clean never goes through cmake, which could reconfigure first.
+                tool.assert_not_called()
+                if visual_studio:
+                    command = [str(c) for c in native.call_args.args[0]]
+                    self.assertIn("-t:Clean", command)
+                    self.assertEqual(Path(command[1]).name, "ALL_BUILD.vcxproj" if whole else "Demo_App.vcxproj")
+                    self.assertEqual("-p:BuildProjectReferences=false" in command, not whole)
+                elif whole:
+                    self.assertEqual(native.call_args.args[0][-2:], ["-t", "clean"])
+                else:
+                    native.assert_not_called()
 
-    def test_shared_transitive_dependency_is_preserved(self):
-        library = self.solution.add_project("Lib", "Lib", T.STATIC_LIBRARY)
-        middle = self.solution.add_project("Middle", "Middle", T.STATIC_LIBRARY)
-        middle.settings.link_project(library, T.STATIC_LIBRARY)
-        self.app.settings.link_project(middle, T.STATIC_LIBRARY)
+    def test_selected_projects_clean_only_their_targets(self):
+        self.solution.add_project("Lib", "Lib", T.STATIC_LIBRARY)
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=["Lib"]))
-        build = self.owned_tree(library)
-        artifact = build / "keep.lib"
-        artifact.write_bytes(b"keep")
-        with patch("cppbuild.engine.process") as process:
-            result = self.solution.clean()
-        self.success(result)
-        self.assertIn("shared dependency", result.processes[0].output)
-        process.assert_not_called()
-        self.assertEqual(artifact.read_bytes(), b"keep")
+        self.owned_tree("Demo_App", "Demo_Lib")
+        if not generators.resolve(self.solution._build_settings).visual_studio:
+            self.skipTest("Visual Studio cleans single Projects with MSBuild")
+        with patch("cppbuild.engine.process", return_value=engine.ProcessReport(("msbuild",), 0, "cleaned")) as native:
+            self.success(self.solution.clean())
+        self.assertEqual(native.call_count, 1)
+        self.assertEqual(Path(str(native.call_args.args[0][1])).name, "Demo_Lib.vcxproj")
 
-    def test_unknown_protection_fails_without_cleaning_selected(self):
-        library = self.solution.add_project("Lib", "Lib", T.STATIC_LIBRARY)
-        provider = Solution.create(self.root / "Provider", "Provider")
-        provider.add_project("External", "External", T.STATIC_LIBRARY)
-        self.app.settings.link_solution(provider.root / ".cppbuild", T.STATIC_LIBRARY)
-        provider.settings.path.rename(provider.settings.path.with_suffix(".offline"))
-        self.solution.set_build_settings(SolutionBuildSettings(build_projects=["Lib"]))
-        self.owned_tree(library)
-        with patch("cppbuild.engine.process") as process:
-            report = self.solution.clean()
-        self.assertFalse(report.success)
-        self.assertIn("could not check unselected dependencies", report.processes[0].output)
-        process.assert_not_called()
+    def test_target_missing_from_tree_is_nothing_to_clean(self):
+        self.owned_tree("Demo_Other")
+        with patch("cppbuild.tooling.process") as tool, patch("cppbuild.engine.process") as native:
+            report = self.app.clean()
+        self.success(report)
+        self.assertIn("Nothing to clean", report.processes[0].output)
+        tool.assert_not_called()
+        native.assert_not_called()
 
     def test_failed_clean_retains_known_artifacts_and_reports_failure(self):
-        build = self.owned_tree(self.app)
+        build = self.owned_tree()
         self.app._known_artifacts = (build / "App.exe",)
-        with patch("cppbuild.tooling.process", return_value=engine.ProcessReport(("cmake",), 1, "broken cache")):
+        failed = engine.ProcessReport(("cmake",), 1, "broken cache")
+        with patch("cppbuild.tooling.process", return_value=failed), patch("cppbuild.engine.process", return_value=failed):
             report = self.app.clean()
         self.assertFalse(report.success)
         self.assertEqual(self.app._build_state, "failed")
@@ -136,29 +161,28 @@ class CleanTests(unittest.TestCase):
             reports.append(report)
         debug_exe = next(p for p in reports[0].artifacts if p.suffix == ".exe")
         release_exe = next(p for p in reports[1].artifacts if p.suffix == ".exe")
-        source, build = engine._locations(self.app, self.app._resolved_build_settings())
-        cmake = source / "CMakeLists.txt"
-        cmake.write_text("message(FATAL_ERROR clean_must_not_configure)\n")
+        build = engine.tree(self.solution, self.app._resolved_build_settings())[0]
+        cmake = self.app.root / "CMakeLists.txt"
+        cmake.write_text("# Generated by CppBuild\nmessage(FATAL_ERROR clean_must_not_configure)\n")
         # Even invalid source inputs and a missing source file must not require generation.
         data = self.app.settings.get()
         data.source_directories = ["build"]
         self.app.settings.save(data)
         (self.app.root / "src/main.cpp").unlink()
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in
-                  (cmake, build / "CMakeCache.txt", build / "App.vcxproj")}
+                  (cmake, build / "CMakeCache.txt", build / "App/Demo_App.vcxproj")}
         self.app.set_build_settings(ProjectBuildSettings(configuration="Debug"))
         report = self.app.clean()
         self.success(report)
         self.assertEqual(len(report.processes), 1)
         self.assertFalse(debug_exe.exists())
         self.assertTrue(release_exe.exists())
-        self.assertFalse(list((build / "App.dir/Debug").glob("*.obj")))
-        self.app.set_build_settings(ProjectBuildSettings(configuration="Release"))
+        self.assertFalse(list((build / "App/Demo_App.dir/Debug").glob("*.obj")))
+        self.solution.set_build_settings(SolutionBuildSettings(configuration="Release"))
         report = self.solution.clean()
         self.success(report)
         self.assertEqual(len(report.processes), 1)
         self.assertFalse(release_exe.exists())
-        self.assertFalse((self.solution.root / ".cppbuild/output").exists())
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
@@ -171,9 +195,13 @@ class CleanTests(unittest.TestCase):
         built = self.app.build()
         self.success(built)
         executable = next(p for p in built.artifacts if p.suffix == ".exe")
-        library = next((lib.root / ".cppbuild/output").rglob("Lib.lib"))
+        build = engine.tree(self.solution, self.solution._build_settings)[0]
+        library = next(build.rglob("Lib.lib"))
         original = library.read_bytes()
         provider.settings.path.rename(provider.settings.path.with_suffix(".offline"))
-        self.success(self.solution.clean())
+        # A Project clean leaves what it links; a whole clean empties the tree's configuration.
+        self.success(self.app.clean())
         self.assertFalse(executable.exists())
         self.assertEqual(library.read_bytes(), original)
+        self.success(self.solution.clean())
+        self.assertFalse(library.exists())

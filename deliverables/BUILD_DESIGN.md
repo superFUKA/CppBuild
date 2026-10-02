@@ -1,5 +1,7 @@
 # 更新・ビルド設定・生成物の詳細案
 
+> 2026-10-01更新：ユーザー合意により、Projectごとの独立CMake構成をやめ、Solutionを1つのCMakeプロジェクト（ソースツリーに生成するCMakeLists.txt、Solution・生成環境ごとの1ツリー）として扱う方式へ移行した。以下の独立構成・include_external_msproject・IMPORTED参照・共有依存の保護に関する記述は経緯の記録で、現行仕様は[API設計](API_DESIGN.md)冒頭と[利用手順](USAGE.md#generated-cmake)を優先する。
+
 > 2026-09-17 実装開始後の追記：M1（管理モデル・設定保存・非保存ビルド設定）を実装し、自動テスト13件を確認。最新の進捗・検証・次の作業は[実装記録](IMPLEMENTATION_STATUS.md)を参照。以下の「未着手」「実装はまだ開始しない」は設計整理時点の記録であり、今回の実装依頼を制限しない。設計の合意状態は維持する。
 
 更新日：2026-09-17。各Projectの独立したCMake構成による個別更新は確認済み。**全体への統合方法、設定メソッドの具体名、管理設定の保存形式等は詳細案であり、実装・実ビルド検証は未実施。** 合意済みの責務は[API_DESIGN.md](API_DESIGN.md)、残る判断は[DESIGN_NOTES.md](DESIGN_NOTES.md)。

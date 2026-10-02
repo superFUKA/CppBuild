@@ -30,9 +30,11 @@ def _strings(values):
 
 def _build_settings(value, seen=None):
     from .output_paths import validate
-    validate(value.intermediate_directory)
     if isinstance(value, ProjectBuildSettings):
-        validate(value.artifact_directory)
+        if value.artifact_directory is not None:
+            validate(value.artifact_directory)
+    else:
+        validate(value.intermediate_directory)
     seen = set() if seen is None else seen
     if id(value) in seen:
         raise SettingsError("Recursive external build settings")
@@ -501,13 +503,14 @@ class Project:
         if forced is not None and forced not in self.settings._data.types:
             raise SettingsError(f"project_types selects a type {self.name} does not have")
         linkable = {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}
+        # One selection per Project, as the generated <Solution>_<Project>_TYPE cache variable:
+        # the operation's override, then the Project's own selection. It is the Project's own
+        # type, and a static/shared selection also switches every static/shared link.
+        chosen = forced or values.project_type
         if requested_type is not None:
-            # A static/shared link follows the operation's override, then the dependency's
-            # own selection; interface links and interface selections keep the saved type.
-            chosen = forced or values.project_type
             values.project_type = chosen if chosen in linkable and requested_type in linkable else requested_type
-        elif forced is not None and (values.project_type or self.settings._data.initial_type) in linkable:
-            values.project_type = forced
+        else:
+            values.project_type = chosen
         for key in ("configuration", "architecture", "cpp_standard", "tools", "cmake"):
             if getattr(values, key) is INHERIT:
                 setattr(values, key, deepcopy(getattr(self.solution._build_settings, key)))

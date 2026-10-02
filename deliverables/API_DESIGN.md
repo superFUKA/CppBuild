@@ -4,6 +4,20 @@
 
 更新日：2026-09-17。設計資料。実装・自動テスト・CMake実ビルド検証は未着手。
 
+## 2026-10-01更新：CppBuildなしで使えるCMakeファイルとSolution単位のビルドツリー
+
+ユーザー合意（2026-10-01）：CppBuildが生成したファイルだけで、CppBuildなしに構成・ビルド・.sln生成・実行・テストでき、持ち出せることを目指す。Projectごとの独立CMake構成にはこだわらない。CppBuildは「普通のCMakeプロジェクトを生成・管理し、操作の窓口になる道具」とし、ビルドの仕組みはCMakeに任せる。以下は実装済みの公開仕様。利用方法は[利用手順](USAGE.md#generated-cmake)、判断の経緯は[設計整理メモ](DESIGN_NOTES.md)。
+
+- **生成ファイル**：Solutionに `CMakeLists.txt`（所属Projectを `add_subdirectory`）と `CppBuildTopLevel.cmake`（最上位のときの既定値とリンク先Solution）、各Projectに `CMakeLists.txt`。相対パスのみ、保存しない設定を含まず、同じ入力から同じ内容。CppBuildが生成していない同名ファイルは上書きせずSettingsError。
+- **ビルドツリー**：Solutionごと・生成環境ごとに1つ（`SolutionBuildSettings.intermediate_directory` の下）。全体／個別の操作は同じツリーのターゲットを使い、依存順はCMakeが決める。構成（configure）は常にSolution全体。
+- **リンク**：内部・外部のProject依存は `<Solution>::<Project>_<保存した形式>`（例 `STL::Containers_static`）の別名でリンクする（IMPORTEDと成果物パスの受け渡しを廃止）。リンク先Solutionはその入口を取り込み、必要なProjectだけを構成する。GUIDによる解決・最上位優先・依存探索ディレクトリの規則は変えない。外部Solutionは `external_build_settings` がなければ最上位の構成・環境を引き継ぐ。
+- **形式**：`<Solution>_<Project>_TYPE` キャッシュ変数で選択し、必要な形式ごとにターゲットを作る。`project_types` と `ProjectBuildSettings.project_type` はこの変数に対応する（前者が優先、`INTERFACE_LIBRARY` の明示との併用はエラー）。
+- **ProjectBuildSettingsの変更**：`intermediate_directory` を削除。`artifact_directory` の既定を `None`（CMakeの既定の配置）に変更。
+- **UpdateReport**：`build_directory` はSolutionのツリー、`solution_file` はSolutionの.sln／.slnx、`project_file`／`filters_file` はツリー内のそのProjectの.vcxproj。Solution.updateのartifactsはVSのソリューションファイル（それ以外は空）。
+- **clean**：Projectのcleanはそのターゲットの成果物だけ（依存先は残す）。Solution.cleanは選択なしでツリーの構成全体（`--target clean`）。共有依存の保護は廃止（CMakeが必要時に作り直す）。事前の構成・依存解決をしない点は維持。
+- **テスト**：TEST Projectごとに、ターゲット名のCTestラベルで自分のテストだけを実行する。GoogleTestの取得はツリーに1回（`googletest_archive` は同じSolution内で同じ値に限る）。
+- **廃止した内部の仕組み**：`include_external_msproject` による全体.sln、`cppbuild_selected`、Pythonによる依存順ビルド、`cppbuild-outputs-<構成>.txt`、Projectごとの`.cppbuild/output`。
+
 ## 合意状態と資料の役割
 
 - **確認済み**：ユーザーと確認した責務・基本操作。全フィールドや具体型の確定を意味しない。
@@ -114,6 +128,8 @@ Solutionテンプレートは各Project設定を含み、ビルド成果物を�
 ## ジャンル3：設定・情報
 
 ### 2026-10-01追加：非保存の出力先指定
+
+> 同日更新：Projectの`intermediate_directory`は廃止、`artifact_directory`の既定は`None`。冒頭の「2026-10-01更新」を優先する。
 
 - `ProjectBuildSettings.intermediate_directory: str = "output/intermediate"`：生成CMakeLists、IDEファイル、キャッシュ、obj等の領域。
 - `ProjectBuildSettings.artifact_directory: str = "output/artifacts"`：実行ファイル、静的・共有ライブラリ、インポートライブラリ、デバッグ用PDBの領域。MSVC静的ライブラリのコンパイルPDBもCMake標準動作でここへ出る場合がある。
@@ -306,8 +322,8 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 - `architecture` の既定は `"x64"` から `None`（ホスト／コンパイラの既定）に変更。値は `None`/`x64`/`Win32`/`ARM64` で、全生成器で有効。Windows＋Ninja＋MSVCでは、vswhere／vcvarsallで対象のMSVC環境を用意する。
 - `UpdateReport` に `generator` と `compiler`（`CompilerInfo`：id/version/path/architecture）を末尾に追加。VS以外ではsolution_file/project_file/filters_fileはNone。VS2026のsolution_fileは.slnx。全体updateのartifactsは、VSでは全体のソリューションファイル、それ以外では空。
 - `EnvironmentOptions.cmake` を追加し、`EnvironmentOptions.architecture` の既定を `None` に変更。`EnvironmentReport` は解決後のarchitectureと `generator` を返す。診断項目名は、既定のVS2022では従来の `vs2022`、それ以外では `compiler`。`Environment.generators(tools=None)` はCMakeの生成器ごとに `GeneratorInfo(name, platform_support, toolset_support, supported)` を返す。
-- cleanは全生成器で、所有ツリーに対して `cmake --build --config <構成> --target clean` を実行する。ツリー内部のGoogleTest・CMakeSourceも削除対象になる。事前の構成禁止と共有依存の保護は維持する。
-- 依存先の成果物は、生成するCMakeListsが出力する `cppbuild-outputs-<構成>.txt`（TARGET_FILE／TARGET_LINKER_FILE）で特定する。拡張子で判定しない。
+- cleanは全生成器で、所有ツリーに対して `cmake --build --config <構成> --target clean` を実行する。ツリー内部のGoogleTest・CMakeSourceも削除対象になる。事前の構成禁止と共有依存の保護は維持する。（2026-10-01更新：冒頭の節を優先。Projectのcleanは対象ターゲットだけ、共有依存の保護は廃止）
+- 依存先の成果物は、生成するCMakeListsが出力する `cppbuild-outputs-<構成>.txt`（TARGET_FILE／TARGET_LINKER_FILE）で特定する。拡張子で判定しない。（2026-10-01廃止：CMake File APIの`nameOnDisk`と成果物一覧を使う）
 - 詳細・制約は [利用手順](USAGE.md) の「生成器・コンパイラの切り替え」、検証状況は [実装記録](IMPLEMENTATION_STATUS.md) を参照。
 
 ## 2026-10-01追加：依存探索ディレクトリとリンク形式の切り替え

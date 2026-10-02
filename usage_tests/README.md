@@ -15,7 +15,7 @@ python -m usage_tests.run --gtest-archive C:/archives/v1.14.0.zip
 # GoogleTestをダウンロードして全シナリオを実行
 python -m usage_tests.run --online
 
-# 選んだシナリオだけ実行（testing以外はGoogleTest不要）
+# 選んだシナリオだけ実行（testing・standalone以外はGoogleTest不要）
 python -m usage_tests.run --scenario lifecycle --scenario libraries
 
 # 保存先を明示（存在しないディレクトリを指定）
@@ -29,7 +29,7 @@ python -m usage_tests.run --scenario lifecycle --generator "Ninja Multi-Config" 
 
 `--generator` を省略すると、OSごとの既定（Windowsでは `Visual Studio 17 2022`）を使う。指定はすべてのシナリオのSolution設定に適用され、テンプレートから復元したSolutionにも再指定する。シナリオのC++ソースは `__declspec` 等のWindows向け記述を含むため、Linux/macOSでそのまま実行することは想定していない。
 
-既定の出力先は`.test-work/usage-日時/`です。同じ保存先の上書き・削除は行いません。再実行では新しい保存先を使ってください。`testing`を含む場合、ZIPか`--online`の指定が必須で、未指定のままテストを省略して成功にはしません。
+既定の出力先は`.test-work/usage-日時/`です。同じ保存先の上書き・削除は行いません。再実行では新しい保存先を使ってください。`testing`・`standalone`を含む場合、ZIPか`--online`の指定が必須で、未指定のままテストを省略して成功にはしません。
 
 ## シナリオ
 
@@ -41,13 +41,15 @@ python -m usage_tests.run --scenario lifecycle --generator "Ninja Multi-Config" 
 | `execution` | First/Failure/Last。空白を含む引数、終了コード7の検出、指定順・失敗時停止／継続、並列・非同期実行とwait、Project単独の非同期実行、ToolSettingsの環境変数が実行プログラムへ届くこと。 |
 | `templates` | Original/Template/Restored。ファイル素材作成・置換展開・別名登録・登録解除、イベントによる追加ファイル生成、再帰通知抑止、before/after通知・解除、Solutionテンプレートからの復元と実行、生成物／非保存設定の除外。 |
 | `testing` | 共有LibraryとPassing/Failing/Empty。GoogleTest/CTest、Debug/Release、成功・skip・意図的な失敗・0件、全体テストの選択と停止／継続、個別testの独立性、修正後の再テスト、全体.sln経由のビルド。 |
+| `standalone`（2026-10-01追加） | ECSと依存探索ディレクトリのSTL（各テストProject付き）。CppBuildで全体テストした後、生成したCMakeファイルの安定性・絶対パスなしを確認し、`.cppbuild`を除いて別の場所へコピーして、素のcmakeだけでECSとSTLそれぞれを構成・ビルド・CTest・実行する。 |
 
 ## 結果の読み方
 
 - `summary.json`：シナリオ別成否、所要時間、記録した操作・確認の数。
 - 各シナリオの`steps.json`：操作結果、コマンド、終了コード、ビルド／実行出力、テストケースなど。
 - 予期しない失敗時の`failure.txt`：Pythonのトレースバック。
-- 各Solution／Projectの`.cppbuild/`：保存設定、CMake／VS生成物、ビルド成果物。
+- 各Solution／Projectの`CMakeLists.txt`・`CppBuildTopLevel.cmake`：生成したCMakeファイル（2026-10-01以降）。
+- 各Solution／Projectの`.cppbuild/`：保存設定。Solutionの`.cppbuild/output/`にビルドツリー（VS生成物・ビルド成果物）。
 
 コンパイルエラー、終了コード7、GoogleTestの失敗・0件は意図的に発生させるケースです。それらが正しく失敗として返されることを確認できればシナリオはPASSになります。最後の終了コードは全シナリオ成功なら0、予期しない失敗があれば1です。一つのシナリオが失敗しても残りは実行します。
 

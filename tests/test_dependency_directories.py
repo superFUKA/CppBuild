@@ -182,7 +182,7 @@ class DependencyDirectoryTests(unittest.TestCase):
                 self.assertEqual(report.processes[-1].output.strip(), "82")
                 whole = self.ecs.build()
                 self.assertTrue(whole.success, "\n".join(p.output[-3000:] for p in whole.processes))
-        self.assertTrue(list((self.stl.root / ".cppbuild/output").rglob("STL.dll")))
+        self.assertTrue(list((self.ecs.root / ".cppbuild/output").rglob("STL.dll")))
         self.assertFalse((self.a.solution.root / "deps").exists())
 
 
