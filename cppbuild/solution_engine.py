@@ -69,9 +69,13 @@ def operate(solution, operation):
             results += removed
             if not all(r.success for r in removed):
                 return engine.OperationReport(tuple(results))
-        if names:
+        # An interface library's target does not build what it links (see engine.operate), so
+        # name every buildable target of the selection's closure, which is also what is recorded.
+        targets = list(dict.fromkeys(engine.target(item.project, item.settings) for node in selected
+                                     for item in engine.closure(node) if engine.buildable(plan, item.project, item.settings)))
+        if targets:
             # Without an explicit selection, build the default target: every member and what it needs.
-            results.append(engine.build_targets(settings, build, names if explicit or operation == "run" else None))
+            results.append(engine.build_targets(settings, build, targets if explicit or operation == "run" else None))
         success = all(r.success for r in results)
         captured = set()
         for node in selected:

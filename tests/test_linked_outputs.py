@@ -186,6 +186,14 @@ class RealScenario:
                 self.assertTrue(built("Base"), name)
                 main.clean()
                 self.assertFalse(built("Base"), name)
+                # The same through the Solution, selecting only the interface library.
+                main.set_build_settings(SolutionBuildSettings(cmake=CMakeSettings(generator=self.generator),
+                                                              build_projects=[name]))
+                report = main.build()
+                self.assertTrue(report.success, "\n".join(p.output[-3000:] for p in report.processes))
+                self.assertTrue(built("Base"), name)
+                main.set_build_settings(SolutionBuildSettings(cmake=CMakeSettings(generator=self.generator)))
+                main.clean()
             # Listed Projects neither collide with Main::App nor build Hidden.
             report = main.build()
             self.assertTrue(report.success, "\n".join(p.output[-3000:] for p in report.processes))
