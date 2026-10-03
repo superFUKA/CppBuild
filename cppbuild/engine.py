@@ -230,7 +230,7 @@ def build_targets(settings, build, names, parallel=None):
 def project_plan(project):
     from . import workspace
     project._check_active()
-    plan = workspace.plan(project.solution)
+    plan = workspace.plan(project.solution, fetch=True)
     node = next(n for n in plan.roots if n.project is project)
     plan.check(lambda n: n.settings.configuration)
     return plan, node

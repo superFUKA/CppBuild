@@ -9,7 +9,7 @@ from .models import SettingsError, ToolSettings
 def validate(tools):
     if not isinstance(tools, ToolSettings):
         raise SettingsError("Expected ToolSettings")
-    for name in (tools.cmake, tools.ctest):
+    for name in (tools.cmake, tools.ctest, tools.git):
         if not isinstance(name, str) or not name or "\x00" in name:
             raise SettingsError("Tool must be an executable name or absolute path")
         if ("/" in name or "\\" in name) and not Path(name).is_absolute():

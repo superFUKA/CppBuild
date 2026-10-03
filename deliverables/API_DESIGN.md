@@ -4,6 +4,22 @@
 
 更新日：2026-09-17。設計資料。実装・自動テスト・CMake実ビルド検証は未着手。
 
+## 2026-10-03追加：gitのURLによるリンクと自動取得
+
+ユーザー依頼（2026-10-03）：リポジトリをcloneしただけの人が、CppBuild・Pythonなしで `cmake -S . -B build` だけでリンク先も含めてビルドできるようにする。リンク先はCppBuildのSolution（生成ファイルをコミット済み）を含むリポジトリとする。利用方法は[利用手順](USAGE.md)の「gitのURLによるリンクと自動取得」、判断は[設計整理メモ](DESIGN_NOTES.md)の同名節。
+
+| 入口 | 内容 |
+| --- | --- |
+| `project.settings.link_git(url, revision=None, solution_path=None, *, link_type)` | リポジトリ内のSolutionの主Projectへリンク。先頭の依存探索ディレクトリ直下へclone（なければ）し、コミットIDを記録。`LinkReport` を返す |
+| `SolutionSettingsData.git_sources` | 保存する記録：置き場所の名前 -> `GitSource(url, revision, path)`。空なら保存しない（schema_versionは変更なし） |
+| `solution.git_sources()` | 間接依存を含む一覧（`GitSourceStatus`：name・url・revision・path・directory・recorded_by・present）。cloneしない |
+| `solution.set_git_source(url, revision=None, solution_path=None)` | 記録の追加・更新（省略時は既定ブランチの最新）。cloneは変更しない。間接依存の食い違いの解消にも使う |
+| `solution.remove_git_source(name)` | リンクされなくなった記録の削除（cloneは残す） |
+| `solution.fetch_git_sources()` | 足りないcloneの取得。`FetchReport(sources, fetched, warnings)` |
+| `SolutionBuildSettings.fetch_git`（既定True）、`ToolSettings.git` | 操作前の自動取得の有無、gitのパス（保存しない） |
+| `GitFetchError.failures`、`GitSourceConflictError.conflicts` | 取得できない対象（置き場所・URL・コミット・理由）、記録の食い違い |
+| CMake：`CPPBUILD_FETCH`（既定ON） | 構成時の自動取得の有無 |
+
 ## 2026-10-01更新：CppBuildなしで使えるCMakeファイルとSolution単位のビルドツリー
 
 ユーザー合意（2026-10-01）：CppBuildが生成したファイルだけで、CppBuildなしに構成・ビルド・.sln生成・実行・テストでき、持ち出せることを目指す。Projectごとの独立CMake構成にはこだわらない。CppBuildは「普通のCMakeプロジェクトを生成・管理し、操作の窓口になる道具」とし、ビルドの仕組みはCMakeに任せる。以下は実装済みの公開仕様。利用方法は[利用手順](USAGE.md#generated-cmake)、判断の経緯は[設計整理メモ](DESIGN_NOTES.md)。

@@ -171,6 +171,8 @@ def _snapshot(solution, destination, name, *, template):
         cloned.solution_folders = values.solution_folders
         # The layout setting is copied; cloned dependencies under it are not (they are external Solutions).
         cloned.dependency_directories = list(values.dependency_directories)
+        # Git records travel with the template; the new Solution clones them on its first operation.
+        cloned.git_sources = deepcopy(values.git_sources)
         cloned.file_templates = {key: material_path(source, value).relative_to(source.root).as_posix()
                                  for key, value in values.file_templates.items()}
         clone.settings.save(cloned)

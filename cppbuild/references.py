@@ -156,9 +156,12 @@ def load(solution, values, projects, loaded, solution_revision, *, migrate):
     return {p.name: (d, revisions[p]) for p, d in data.items()}, solution_revision
 
 
-def save_project(settings, values, *, additions=()):
+def save_project(settings, values, *, additions=(), git_source=None):
     solution = settings.owner.solution
     parent = solution.settings.get()
+    if git_source is not None:
+        name, record = git_source
+        parent.git_sources[name] = record
     originals = {p: p.settings.get() for p in solution.projects()}
     data = {p: deepcopy(d) for p, d in originals.items()}
     data[settings.owner] = deepcopy(values)
@@ -180,7 +183,7 @@ def save_project(settings, values, *, additions=()):
     return report
 
 
-def link(settings, config_directory, link_type):
+def link(settings, config_directory, link_type, *, git_source=None):
     config = dependencies.path(settings.owner, str(config_directory))
     other = _identity_solution(config)
     project_name = other.settings._data.main_project
@@ -199,6 +202,7 @@ def link(settings, config_directory, link_type):
         raise SettingsError("Dependency is already registered")
     key = uuid.uuid4().hex
     values.dependencies[key] = dependency
-    save_project(settings, values, additions=(ProjectReference(project_guid, paths.relative(settings.owner.solution.root, config)),))
+    save_project(settings, values, additions=(ProjectReference(project_guid, paths.relative(settings.owner.solution.root, config)),),
+                 git_source=git_source)
     from .models import LinkReport
     return LinkReport(key, project_name, link_type)

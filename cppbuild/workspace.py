@@ -117,6 +117,15 @@ class Plan:
             result.append((other, directory, binary, folder))
         return result
 
+    @cached_property
+    def _git_sources(self):
+        from .git_sources import statuses
+        return tuple(statuses(self.solution))
+
+    def git_sources(self):
+        """This Solution's git sources and the ones its linked Solutions record (no cloning)."""
+        return self._git_sources
+
     # Files ---------------------------------------------------------------------
 
     def documents(self):
@@ -307,10 +316,17 @@ def _check_imported(project, value, configuration):
             raise SettingsError(f"Import library does not exist: {implib}")
 
 
-def plan(solution):
-    """Resolve the whole Solution; every operation configures the same CMake project."""
+def plan(solution, *, fetch=False):
+    """Resolve the whole Solution; every operation configures the same CMake project.
+
+    fetch: clone missing git sources first (the operation's own Solution only; a linked
+    Solution's plan never clones into its dependency directories).
+    """
     from .engine import _scan
     solution.settings.reload()
+    if fetch:
+        from .git_sources import ensure
+        ensure(solution)
     display = solution.settings._data.solution_folders is not None
     roots, nodes = resolve(solution.projects(), include_external_members=display)
     result = Plan(solution, roots, nodes)

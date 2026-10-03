@@ -155,26 +155,29 @@ def _dependency_directories(solutions):
     """GUID -> Solution config found directly under the top-level dependency directories."""
     from .core import Solution
     from . import storage
+    from .git_sources import statuses
     guids, opened = {}, {}
     for solution in sorted(solutions, key=lambda s: str(s.root)):
         local = {p.settings._data.guid for p in solution.projects()}
+        configs = []
         for directory in solution.settings._data.dependency_directories:
             root = storage.contained(solution.root, directory)
-            if not root.is_dir():
+            if root.is_dir():
+                configs += [(child / ".cppbuild").resolve() for child in sorted(root.iterdir())]
+        # Git sources, including linked Solutions' own and ones deeper in a repository.
+        configs += [status.config.resolve() for status in statuses(solution) if status.present]
+        for config in dict.fromkeys(configs):
+            manifest = config / "project.json"
+            if not manifest.is_file() or storage.read_json(manifest).get("kind") != "solution":
                 continue
-            for child in sorted(root.iterdir()):
-                config = (child / ".cppbuild").resolve()
-                manifest = config / "project.json"
-                if not manifest.is_file() or storage.read_json(manifest).get("kind") != "solution":
-                    continue
-                if config not in opened:
-                    opened[config] = Solution.open(config)
-                for member in opened[config].projects():
-                    project_guid = member.settings._data.guid
-                    if project_guid in local:
-                        raise SettingsError(f"Dependency directory contains a member Project GUID: {project_guid}")
-                    previous = guids.setdefault(project_guid, config)
-                    if previous != config:
-                        raise SettingsError(f"The same Project GUID exists in dependency directories: {project_guid} "
-                                            f"({previous.parent}, {config.parent})")
+            if config not in opened:
+                opened[config] = Solution.open(config)
+            for member in opened[config].projects():
+                project_guid = member.settings._data.guid
+                if project_guid in local:
+                    raise SettingsError(f"Dependency directory contains a member Project GUID: {project_guid}")
+                previous = guids.setdefault(project_guid, config)
+                if previous != config:
+                    raise SettingsError(f"The same Project GUID exists in dependency directories: {project_guid} "
+                                        f"({previous.parent}, {config.parent})")
     return guids, opened

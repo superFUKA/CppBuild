@@ -10,7 +10,7 @@ from .models import ProjectType, SettingsError
 
 def _prepare(solution):
     solution._last_update = None
-    plan = workspace.plan(solution)
+    plan = workspace.plan(solution, fetch=True)
     for node in plan.nodes:
         if not compatible(node.settings, solution._build_settings):
             raise SettingsError("Whole-solution operations require matching configuration and generation environment")

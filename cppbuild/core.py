@@ -10,7 +10,7 @@ import uuid
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference, LIBRARY_TYPES,
+    TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference, LIBRARY_TYPES, GitSource,
 )
 from . import storage
 from . import dependencies as dependency_data
@@ -63,7 +63,7 @@ def _build_settings(value, seen=None):
     for key in ("parallel", "test_parallel") if isinstance(value, ProjectBuildSettings) else ("parallel", "run_parallel"):
         if type(getattr(value, key)) is not int or getattr(value, key) < 1:
             raise SettingsError(f"{key} must be positive")
-    for key in ("run_wait",) if isinstance(value, ProjectBuildSettings) else ("run_wait", "run_continue_on_failure", "test_continue_on_failure"):
+    for key in ("run_wait",) if isinstance(value, ProjectBuildSettings) else ("run_wait", "run_continue_on_failure", "test_continue_on_failure", "fetch_git"):
         if type(getattr(value, key)) is not bool:
             raise SettingsError(f"{key} must be boolean")
     if isinstance(value, ProjectBuildSettings):
@@ -305,6 +305,18 @@ class ProjectSettings(_Settings):
         from .references import link
         return link(self, config_directory, link_type)
 
+    def link_git(self, url, revision=None, solution_path=None, *, link_type):
+        """Link the main Project of the Solution in a git repository, cloned under the first dependency directory.
+
+        revision: branch, tag or commit; None is the default branch. The commit ID is recorded.
+        solution_path: the Solution's .cppbuild relative to the repository root (default ".cppbuild").
+        """
+        self.owner._check_active()
+        from .git_sources import prepare_link
+        from .references import link
+        name, record, config = prepare_link(self.owner.solution, url, revision, solution_path)
+        return link(self, config, link_type, git_source=(name, record))
+
     def link_package(self, package):
         from .models import CMakePackage
         if not isinstance(package, CMakePackage):
@@ -369,6 +381,8 @@ class SolutionSettings(_Settings):
             if any(path.is_relative_to(r) or r.is_relative_to(path) for r in roots):
                 raise SettingsError("Dependency directories cannot overlap member Projects")
             seen.add(path)
+        from .git_sources import validate as validate_git_sources
+        validate_git_sources(values)
         if not isinstance(values.file_templates, dict):
             raise SettingsError("file_templates must be a mapping")
         from .templates import material_path
@@ -384,8 +398,14 @@ class SolutionSettings(_Settings):
         raw.setdefault("solution_folders", None)
         raw.setdefault("references", {})
         raw.setdefault("dependency_directories", [])
+        raw.setdefault("git_sources", {})
         storage.object_fields(raw, {"name", "projects", "main_project", "file_templates", "solution_folders", "references",
-                                    "dependency_directories"})
+                                    "dependency_directories", "git_sources"})
+        if not isinstance(raw["git_sources"], dict):
+            raise SettingsError("git_sources must be a mapping")
+        for name, source in raw["git_sources"].items():
+            storage.object_fields(source, {"url", "revision", "path"})
+            raw["git_sources"][name] = GitSource(**source)
         if not isinstance(raw["references"], dict):
             raise SettingsError("references must be a mapping")
         for name, reference in raw["references"].items():
@@ -448,6 +468,8 @@ class SolutionSettings(_Settings):
         if not data["dependency_directories"]:
             # Written only when used, so existing files keep their bytes.
             del data["dependency_directories"]
+        if not data["git_sources"]:
+            del data["git_sources"]
         return storage.document(self.path, "solution", data)
 
     def set_file_template(self, name, template_file):
@@ -743,6 +765,32 @@ class Solution:
             report = self.settings._publish(values)
             del self._projects[name]
         return report
+
+    def git_sources(self):
+        """Every git source: this Solution's records, then the ones linked Solutions record (GitSourceStatus)."""
+        from .git_sources import statuses
+        self.settings.reload()
+        return tuple(statuses(self))
+
+    def set_git_source(self, url, revision=None, solution_path=None):
+        """Record url at a commit (None: the latest of the default branch); an existing clone is not changed.
+
+        Also chooses the commit of a repository that only linked Solutions record.
+        """
+        from .git_sources import set_source
+        return set_source(self, url, revision, solution_path)
+
+    def remove_git_source(self, name):
+        """Forget a record no Project links any more; its clone is kept."""
+        from .git_sources import remove_source
+        return remove_source(self, name)
+
+    def fetch_git_sources(self):
+        """Clone every missing git source at its recorded commit, as the generated CMake does."""
+        from .git_sources import fetch
+        self.settings.reload()
+        with storage.operation_lock(self.root):
+            return fetch(self)
 
     def move_project(self, name, destination, *, auto_update=True):
         from .relocation import move_project

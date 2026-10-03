@@ -23,6 +23,54 @@ CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 GOOGLETEST_URL = "https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip"
 GOOGLETEST_SHA256 = "1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4"
 COMPILED_SUFFIXES = {".cpp", ".cc", ".cxx"}
+# The conventions between generated files (CPPBUILD_REQUEST_*, aliases, ...). A linked
+# Solution's files must use the same one, e.g. when they come from another repository.
+FORMAT = 1
+# Same rules as git_sources.fetch(): clone a missing place at the recorded commit through a
+# temporary directory; never change an existing place, only compare it with the record.
+GIT_SOURCE_FUNCTION = r'''function(_cppbuild_git_source directory url revision solution)
+  set(_place "${CMAKE_CURRENT_SOURCE_DIR}/${directory}")
+  find_package(Git QUIET)
+  if(EXISTS "${_place}/${solution}/project.json")
+    if(GIT_EXECUTABLE AND EXISTS "${_place}/.git")
+      execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_place}" rev-parse HEAD
+        RESULT_VARIABLE _result OUTPUT_VARIABLE _head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if(_result EQUAL 0 AND NOT _head STREQUAL revision)
+        message(WARNING "${directory} is at ${_head}, but ${revision} is recorded for ${url}; it is left unchanged")
+      endif()
+    endif()
+    return()
+  endif()
+  if(EXISTS "${_place}")
+    set(_reason "the place exists without ${solution}/project.json")
+  elseif(NOT CPPBUILD_FETCH)
+    set(_reason "CPPBUILD_FETCH is OFF")
+  elseif(NOT GIT_EXECUTABLE)
+    set(_reason "git was not found")
+  else()
+    set(_temporary "${_place}.cppbuild-fetch")
+    file(REMOVE_RECURSE "${_temporary}")
+    message(STATUS "CppBuild: cloning ${url} at ${revision} into ${directory}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" clone --no-checkout -- "${url}" "${_temporary}"
+      RESULT_VARIABLE _result OUTPUT_QUIET ERROR_VARIABLE _error)
+    if(_result EQUAL 0)
+      execute_process(COMMAND "${GIT_EXECUTABLE}" -c advice.detachedHead=false -C "${_temporary}" checkout --detach "${revision}"
+        RESULT_VARIABLE _result OUTPUT_QUIET ERROR_VARIABLE _error)
+    endif()
+    if(_result EQUAL 0 AND EXISTS "${_temporary}/${solution}/project.json")
+      file(RENAME "${_temporary}" "${_place}")
+      return()
+    endif()
+    file(REMOVE_RECURSE "${_temporary}")
+    if(_result EQUAL 0)
+      set(_error "no CppBuild Solution at ${solution}")
+    endif()
+    string(STRIP "${_error}" _error)
+    string(REPLACE "\n" " " _reason "git failed: ${_error}")
+  endif()
+  set_property(GLOBAL APPEND_STRING PROPERTY CPPBUILD_GIT_MISSING
+    "\n  ${directory}: ${url} at ${revision} (${_reason})\n    git clone ${url} ${directory} && git -C ${directory} checkout ${revision}")
+endfunction()'''
 KIND = {ProjectType.STATIC_LIBRARY: "STATIC", ProjectType.SHARED_LIBRARY: "SHARED",
         ProjectType.INTERFACE_LIBRARY: "INTERFACE", ProjectType.EXECUTABLE: "EXECUTABLE", ProjectType.TEST: "TEST"}
 SUFFIX = {ProjectType.STATIC_LIBRARY: "static", ProjectType.SHARED_LIBRARY: "shared",
@@ -112,6 +160,12 @@ def _source_path(base, target, what):
     return '"${CMAKE_CURRENT_SOURCE_DIR}/' + value + '"'
 
 
+def _quotable(value):
+    if any(c in value for c in '"\\$;'):
+        raise SettingsError(f"Path contains characters CMake cannot quote here: {value}")
+    return value
+
+
 def _header(source, description):
     return [f"{MARKER} from {source}. Do not edit: CppBuild rewrites this file.", f"# {description}", ""]
 
@@ -141,7 +195,8 @@ def solution_entry(solution):
     data = solution.settings._data
     requests = internal_requests(solution)
     lines = _header(".cppbuild/project.json", f"Solution {data.name}: configure with cmake -S <this directory> -B <build directory>.")
-    lines += ["cmake_minimum_required(VERSION 3.24)", f"project({data.name} LANGUAGES CXX)", "",
+    lines += ["cmake_minimum_required(VERSION 3.24)", f"project({data.name} LANGUAGES CXX)",
+              f"set_property(DIRECTORY PROPERTY CPPBUILD_FORMAT {FORMAT})  # checked by the including Solution", "",
               "# Every member is added, with this Solution's linked Solutions, unless another CppBuild",
               "# Solution includes this one (CPPBUILD_LINKED) and requests only the Projects it needs.",
               "set(CPPBUILD_WHOLE_SOLUTION OFF)",
@@ -203,6 +258,21 @@ def top_level(plan):
               "    enable_testing()",
               "  endif()",
               "endif()"]
+    sources = plan.git_sources()
+    if sources:
+        lines += ["", "# Linked Solutions in git repositories, including the ones linked Solutions record.",
+                  "# A missing place is cloned at the recorded commit; an existing one is never changed.",
+                  'option(CPPBUILD_FETCH "Clone missing linked Solutions with git at their recorded commits" ON)',
+                  *GIT_SOURCE_FUNCTION.splitlines(),
+                  "set_property(GLOBAL PROPERTY CPPBUILD_GIT_MISSING)"]
+        for status in sources:
+            directory = _relative(solution.root, status.directory, "A git source place")
+            lines.append(f"_cppbuild_git_source({arg(directory)} {arg(status.url)} {status.revision} {arg(status.path)})")
+        lines += ["get_property(_cppbuild_missing GLOBAL PROPERTY CPPBUILD_GIT_MISSING)",
+                  "if(_cppbuild_missing)",
+                  '  message(FATAL_ERROR "Linked Solutions could not be fetched with git. Place each one by hand '
+                  '(paths are relative to ${CMAKE_CURRENT_SOURCE_DIR}):${_cppbuild_missing}")',
+                  "endif()"]
     external = plan.external_requests()
     if external:
         lines += ["", f"# Projects requested from linked Solutions, resolved with {data.name} as the top level."]
@@ -222,7 +292,12 @@ def top_level(plan):
         if folder is not None:
             lines.append(f"set(CMAKE_FOLDER {arg(folder)})")
         lines += [f'set(CPPBUILD_LINKED_OUTPUT "_linked/{binary}")',
-                  f'add_subdirectory({arg(directory)} "${{CMAKE_BINARY_DIR}}/${{CPPBUILD_LINKED_OUTPUT}}")']
+                  f'add_subdirectory({arg(directory)} "${{CMAKE_BINARY_DIR}}/${{CPPBUILD_LINKED_OUTPUT}}")',
+                  f'get_property(_cppbuild_format DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/{_quotable(directory)}" PROPERTY CPPBUILD_FORMAT)',
+                  f'if(NOT _cppbuild_format STREQUAL "{FORMAT}")',
+                  f'  message(FATAL_ERROR "{_quotable(directory)} was generated by an incompatible CppBuild '
+                  f'(format ${{_cppbuild_format}}, expected {FORMAT}); regenerate its files with this CppBuild")',
+                  "endif()"]
         if folder is not None:
             lines.append("unset(CMAKE_FOLDER)")
     if linked:

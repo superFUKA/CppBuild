@@ -1,6 +1,37 @@
 # 実装・検証記録
 
-## 最新の現在地：2026-10-03 設計レビュー4項目の実装
+## 2026-10-03 全体クラス図
+
+- ユーザーの依頼により、`6979cf6` の実装に対応する[全体クラス図](CLASS_DIAGRAM.md)を追加。設定の所有関係、実際の継承、内部の生成計画、結果型、関数モジュールの責務を記載した。
+- ソースのクラス定義と掲載を照合。Mermaidの描画表示は未確認。資料のみの変更で、ビルド・テストは未実施。設計レビューで挙げた修正案は未実装。
+
+## 最新の現在地：2026-10-03 実装後の設計レビュー
+
+- `6979cf6` と周辺実装を、設計の妥当性・責務・APIの自然さを中心に静的レビューした。詳細は[実装後の設計レビュー](DESIGN_REVIEW_FOLLOWUP_2026-10-03.md)。
+- 基本方針は妥当。残る優先課題は、操作内の設定固定、生成・ビルド・実行の状態判定の分離、全体／個別の対象決定・結果記録の共通化。リンク先の単独利用準備の未完了理由も保持する案を記載した。
+- 製品コードは未変更。今回はテスト・実ビルド・並行処理の再現を実施していない。以下の195件成功は前回の実装時の記録。次の作業はユーザーの指示に応じた設計整理・修正と検証。提案は仕様変更の合意ではない。
+- 前節の実装は現在 `6979cf6` でコミット済み。今回追加したレビュー資料は未コミット。
+
+## 最新の現在地：2026-10-03 gitのURLによるリンクと自動取得
+
+依頼「gitのURLによるリンクと自動取得」を、リンク先はCppBuildのSolutionを含むリポジトリという前提で実装した。仕様は[API設計](API_DESIGN.md)冒頭、使い方は[利用手順](USAGE.md)の同名節、判断と見送った点は[設計整理メモ](DESIGN_NOTES.md)の同名節。
+
+- 新規 `cppbuild/git_sources.py`：記録の検証、間接依存を含む一覧（最上位優先・食い違いはエラー）、リビジョンの解決、取得（一時ディレクトリへclone→checkout→移動、既存の置き場所は変更しない）。
+- `models.py`：`GitSource`、`SolutionSettingsData.git_sources`（空なら保存しない）、`ToolSettings.git`、`SolutionBuildSettings.fetch_git`、`FetchFailure`・`GitFetchError`・`GitSourceConflictError`。
+- `core.py`：`ProjectSettings.link_git`、`Solution.git_sources`・`set_git_source`・`remove_git_source`・`fetch_git_sources`。`references.link` は記録を依存・参照と一緒に保存する。
+- `graph.py`：gitの置き場所を最上位の依存探索ディレクトリと同じく優先する。`workspace.plan(..., fetch=True)` を操作の入口だけで使う。
+- `cmake_files.py`：`CppBuildTopLevel.cmake` に取得用の関数と全リンク先の呼び出し、`CPPBUILD_FETCH` オプション、取得できない対象の一覧と手で置く方法のエラー。生成形式の版 `CPPBUILD_FORMAT`（=1）を各Solutionが宣言し、取り込む側が確認する。
+- テンプレートは記録を引き継ぐ（cloneはしない。新しいSolutionの最初の操作で取得）。
+- 試験：新規 `tests/test_git_sources.py`。ローカルのgitリポジトリ（`file://`）を使い、通信しない。
+  - API：記録・解決、リビジョンの更新（既存のcloneは不変）、タグ・ブランチ、警告、テンプレート、間接依存とリポジトリ内のSolution、菱形の食い違いと最上位での解消、認証情報入りURLの拒否、取得失敗の一覧、既存の作業版の使用、`fetch_git=False`。
+  - 実試験（3生成器）：CppBuildで作ったAppのリポジトリだけをcloneし、素のcmakeで構成する。`CPPBUILD_FETCH=OFF` で一覧付きのエラー、ONで間接依存まで取得してビルド・実行（42）。記録と違うcloneは警告だけで不変。生成形式の不一致はエラー。
+- 検証（Windows 11、CMake 4.2.3、Git for Windows）：
+  - `CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1` で201件中200件成功、366.8秒。失敗した1件（`test_external` の静的・共有同時利用、VS2022の構成）は、単独とファイル単位の再実行（計3回）で成功した。原因は採取できていない（試験が構成出力の先頭行しか表示しない）。過去に記録した一時的なファイルロックと同種の可能性がある。
+  - その後に追加したテンプレートの確認を含め、`test_git_sources` は3生成器で全件成功。
+  - 利用シナリオ7件が3生成器で全PASS（`.test-work/usage-git-*`）。
+- 未実施：実際のリモート（HTTPS・SSH、認証付き）での取得、Linux/macOS、VS IDEのGUI操作。変更は未コミット。
+
+## 2026-10-03 設計レビュー4項目の実装（`6979cf6` でコミット済み）
 
 [全体設計レビュー](DESIGN_REVIEW_2026-10-03.md)の優先度の高い4項目を実装した。判断と見送った点は[設計整理メモ](DESIGN_NOTES.md)の「設計レビューへの対応」。前段のコードレビュー5件の修正は `eb3b6b3` でコミット済み。
 
@@ -12,7 +43,7 @@
 - 試験：新規 `tests/test_tree_state.py`（ロック共通・ツリー変更でstale・個別操作の記録範囲）、`tests/test_names.py`（ターゲット名・予約名・実行ファイルと同名DLL・テスト名の接頭辞）、`tests/test_linked_outputs.py` に一括書き込み・失敗時の復元・ロック範囲、`tests/test_testing.py` に同名テストの実試験（VS2022）。追加した試験は修正前の動作で失敗する内容（ロック・stale・書き込みは手元の再現、同名テストは接頭辞を外して確認）。
 - 検証（Windows 11、CMake 4.2.3、GoogleTestはオンライン取得）：`CPPBUILD_TEST_VS2022=1 CPPBUILD_TEST_NINJA=1 CPPBUILD_TEST_VS2026=1` で全195件成功、skipなし、391.4秒。利用シナリオ7件が3生成器で全PASS（`.test-work/usage-design-*`）。
 - 振る舞いの変更：全体操作中のProject.cleanは `SettingsConflictError`。ツリーを変えると `info()` が `stale`。実行ファイルと同名の共有ライブラリを一緒にビルドする構成と、予約名になる構成はエラー。CTestのテスト名に `<Project名>.` が付く（CppBuildの `TestCaseResult.name` は従来どおり）。
-- 未実施：Linux/macOS、VS IDEのGUI操作、実際に複数プロセスを競合させる試験。変更は未コミット。
+- 未実施：Linux/macOS、VS IDEのGUI操作、実際に複数プロセスを競合させる試験。
 
 ## 2026-10-03 コードレビュー5件の修正（`eb3b6b3` でコミット済み）
 

@@ -43,6 +43,14 @@ class ProjectReference:
 
 
 @dataclass
+class GitSource:
+    """A linked Solution's repository: its URL, the recorded commit and the Solution's .cppbuild in it."""
+    url: str
+    revision: str
+    path: str = ".cppbuild"
+
+
+@dataclass
 class CMakePackage:
     name: str
     target: str
@@ -99,12 +107,15 @@ class SolutionSettingsData:
     references: dict[str, ProjectReference] = field(default_factory=dict)
     # Directories whose direct child Solutions resolve dependency GUIDs first (e.g. "deps").
     dependency_directories: list[str] = field(default_factory=list)
+    # Place name (directly under the first dependency directory) -> repository cloned there.
+    git_sources: dict[str, GitSource] = field(default_factory=dict)
 
 
 @dataclass
 class ToolSettings:
     cmake: str = "cmake"
     ctest: str = "ctest"
+    git: str = "git"
     environment: dict[str, str] = field(default_factory=dict)
 
 
@@ -159,6 +170,8 @@ class SolutionBuildSettings:
     project_types: dict[str, ProjectType] = field(default_factory=dict)
     # The Solution's CMake build trees, one per generation environment.
     intermediate_directory: str = "output/intermediate"
+    # Clone missing git_sources (and their own) before an operation, as the generated CMake does.
+    fetch_git: bool = True
 
 
 @dataclass(frozen=True)
@@ -193,3 +206,37 @@ class MissingDependenciesError(SettingsError):
     @property
     def project_guids(self):
         return tuple(m.project_guid for m in self.missing)
+
+
+@dataclass(frozen=True)
+class FetchFailure:
+    name: str
+    directory: str
+    url: str
+    revision: str
+    reason: str
+
+
+class GitFetchError(SettingsError):
+    """Linked Solutions that could not be cloned; each can be placed by hand instead."""
+
+    def __init__(self, failures):
+        self.failures = tuple(failures)
+        lines = ["Linked Solutions could not be fetched with git. Place each one by hand:"]
+        for f in self.failures:
+            lines.append(f"  {f.directory}: {f.url} at {f.revision} ({f.reason})")
+            lines.append(f"    git clone {f.url} {f.directory} && git -C {f.directory} checkout {f.revision}")
+        super().__init__("\n".join(lines))
+
+
+class GitSourceConflictError(SettingsError):
+    """Linked Solutions record one repository at different commits and the top level records none."""
+
+    def __init__(self, conflicts):
+        # (url, ((recorded_by, revision, path), ...)) per repository
+        self.conflicts = tuple(conflicts)
+        lines = ["Linked Solutions record the same repository differently; record it in this Solution "
+                 "with Solution.set_git_source to choose:"]
+        for url, records in self.conflicts:
+            lines.append(f"  {url}: " + ", ".join(f"{revision} ({path}) by {owner}" for owner, revision, path in records))
+        super().__init__("\n".join(lines))

@@ -14,7 +14,9 @@ from .models import (
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
     TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
     MissingDependency, MissingDependenciesError,
+    GitSource, FetchFailure, GitFetchError, GitSourceConflictError,
 )
+from .git_sources import FetchReport, GitSourceStatus
 
 __all__ = [
     "SolutionFolderSettings", "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
@@ -27,4 +29,5 @@ __all__ = [
     "TemplateTools", "Event", "EventCallbackError", "Environment", "EnvironmentOptions",
     "EnvironmentReport", "EnvironmentItem", "ToolSettings", "ProjectInfo", "SolutionInfo",
     "CMakeSettings", "GeneratorInfo", "CompilerInfo", "MissingDependency", "MissingDependenciesError",
+    "GitSource", "GitSourceStatus", "FetchReport", "FetchFailure", "GitFetchError", "GitSourceConflictError",
 ]

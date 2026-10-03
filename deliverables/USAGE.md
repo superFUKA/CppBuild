@@ -338,3 +338,39 @@ ecs.set_build_settings(SolutionBuildSettings(project_types={stl_guid: ProjectTyp
 - 最上位Solutionが自分で `link_solution` した所在は、探索ディレクトリより優先する（作業版を指す場合など）。
 - 探索対象は、探索ディレクトリ直下の各ディレクトリにある `.cppbuild/project.json`（Solution）だけ。再帰的には探さない。同じGUIDが2か所にあるとエラーになる。
 - 依存先Projectの `ProjectBuildSettings(project_type=...)` でも、静的⇔共有を切り替えられる。外部Solution内のProjectは、最上位の `project_types`（GUID指定）で切り替える。
+
+# gitのURLによるリンクと自動取得（2026-10-03追加）
+
+リポジトリをcloneしただけの人が、CppBuild・Pythonなしで `cmake -S . -B build` だけでリンク先も含めてビルドできるようにする。リンク先は、CppBuildのSolution（生成ファイルをコミット済み）を含むgitリポジトリとする。
+
+```python
+from cppbuild import GitFetchError, GitSourceConflictError, ProjectType, SolutionBuildSettings
+
+data = app_solution.settings.get()
+data.dependency_directories = ["deps"]          # clone は先頭の依存探索ディレクトリの直下に置く
+app_solution.settings.save(data)
+
+# 第1引数：URL（必須）、第2引数：ブランチ・タグ・コミット（省略時は既定ブランチの最新）、
+# 第3引数：リポジトリのルートからSolutionの .cppbuild への相対パス（省略時は ".cppbuild"）
+app.settings.link_git("https://example.com/team/STL.git", link_type=ProjectType.STATIC_LIBRARY)
+app.settings.link_git("https://example.com/team/Mono.git", "v1.2", "libs/Core/.cppbuild",
+                      link_type=ProjectType.STATIC_LIBRARY)
+
+app_solution.settings.get().git_sources        # この Solution の記録：名前 -> GitSource(url, revision, path)
+app_solution.git_sources()                     # 間接依存を含む一覧（GitSourceStatus：記録元・clone の有無）
+app_solution.set_git_source("https://example.com/team/STL.git")           # 記録を既定ブランチの最新へ
+app_solution.set_git_source("https://example.com/team/STL.git", "v2.0")   # タグ・ブランチ・コミットへ
+report = app_solution.fetch_git_sources()       # 足りない clone を取得（report.fetched / report.warnings）
+app_solution.remove_git_source("STL")           # どのProjectもリンクしなくなった記録を削除（clone は残す）
+```
+
+- **記録**：リンクした時点で決まったコミットID（40桁）を、Solutionの `project.json` の `git_sources` に保存する。ブランチ名やタグ名のままでは記録しない。置き場所の名前はURLのリポジトリ名（同名の別URLには短い識別子を付ける）で、どのPCでも同じになる。認証情報を含むURL（`https://user:token@...`）は拒否する。認証は利用者のgitの設定に任せる。
+- **リンク**：主Project（`main_project`）にリンクする（`link_solution` と同じ）。依存・参照・記録を一緒に保存する。リンク先が置き場所になければcloneし、あればそのまま使う。
+- **間接依存**：リンク先Solutionが自分で記録したgitのリンク先も、最上位の置き場所（`deps/` 直下）へ取得する。同じリポジトリの記録が食い違う場合は、最上位の記録を使う。最上位に記録がなく食い違う場合は `GitSourceConflictError`。`set_git_source` で最上位に記録すると解消する。
+- **既存の置き場所**：すでにSolutionがあれば、削除・更新・切り替えをしない（編集中の作業版を守る）。記録と手元のコミットが違えば、`fetch_git_sources().warnings` と構成時のCMakeの警告で知らせる。`set_git_source` も記録だけを変え、cloneは変えない。
+- **自動取得**：CppBuildの操作（update・build・run・test等）は、足りないcloneを先に取得する。`SolutionBuildSettings(fetch_git=False)` で無効にできる。gitのパスは `ToolSettings(git=...)`。
+- **CppBuildなしの構成**：最上位の `CppBuildTopLevel.cmake` に、間接依存を含む全リンク先のURL・コミット・置き場所が並ぶ。構成時に、置き場所がなければ一時ディレクトリへcloneして記録のコミットをcheckoutし、置き場所へ移す。`-DCPPBUILD_FETCH=OFF` で取得を無効にできる。
+- **取得できない場合**：gitがない、オフライン、権限がない、コミットがない場合は、対象の一覧（置き場所・URL・コミット・理由）と、手で置くコマンド（`git clone <URL> <置き場所> && git -C <置き場所> checkout <コミット>`）をエラーで示す（Pythonは `GitFetchError.failures`）。
+- **生成形式の確認**：リンク先の生成ファイルが別の版のCppBuildで作られ、取り決めが合わない場合は、構成時にエラーにする（各Solutionの `CMakeLists.txt` が `CPPBUILD_FORMAT` を宣言し、取り込む側が確認する）。
+- **リンク先リポジトリの前提**：CppBuildのSolutionを含み、その生成ファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`）をコミットしていること。`deps/` と `.cppbuild/output/` はコミットしない。
+- **制約**：パス指定（`link_solution`）でリンクしたSolutionの中のgitの記録はたどらない（gitでリンクしたSolutionの記録だけをたどる）。1つのリポジトリから使えるSolutionは1つ。サブモジュール・Git LFSは扱わない。`remove_git_source` は記録だけを消し、cloneは削除しない。
