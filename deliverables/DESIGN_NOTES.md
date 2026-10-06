@@ -1,5 +1,13 @@
 # 設計整理メモ
 
+## 2026-10-06相談：Windowsのパス長（未合意・未実装）
+
+- 中間ファイルのパスは `.cppbuild\output\intermediate\<10桁>\<Projectの相対パス>\<Solution名>_<Project名>.dir\<構成>\<ソース名>.obj`（VS生成器。Ninjaは `CMakeFiles\` が加わる）。名前が2回入るのは、ターゲット名が `<Solution名>_<Project名>` で、CMakeが `<ターゲット名>.dir` を作るため。
+- 案（実測あり）：CMake 4.2の `CMAKE_INTERMEDIATE_DIR_STRATEGY=SHORT`（VS・Ninja・Makefileが対応）。VS2022で `LongSolutionName_LongProjectName.dir\Debug\main_with_long_name.obj` が `.o\caa81679\Debug\949f3994.obj` になることを確認した。4.2より前のCMakeでは無視され、従来どおりになる。キャッシュ変数のため、生成ファイルにキャッシュの既定値として書けば素のcmakeでも効く見込み（未確認。今回の実測は `-D` で指定）。欠点はオブジェクト名がハッシュになること。
+- 案：分かりやすいエラー。ビルド前に「ビルドツリー＋Projectの相対パス＋ターゲット.dir＋構成＋最長のソース名.obj」を見積もり、260文字を超えれば警告またはエラーにする。cl.exeが長いパスをどこまで扱えるかは未確認。
+- 案：既定の置き場所 `.cppbuild\output\intermediate\` を短くする。`intermediate_directory` で既に変えられ、既定を変えると既存のビルドツリーを作り直すことになる。
+- 判断はユーザーに委ねる。
+
 ## 2026-10-03実装：gitのURLによるリンクと自動取得
 
 依頼（gitのURLでリンクし、構成時に自動取得する）を検討し、ユーザーの了承（リンク先はCppBuildのSolutionを含むリポジトリとする）を得て実装した。実装時の判断は次のとおり。

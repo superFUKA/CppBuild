@@ -1,5 +1,10 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-06）
+
+- **ビルド等の出力の文字化けを修正（未コミット）**：`engine.process()` を、バイト列で受けて行ごとにUTF-8→ANSIコードページ（置換あり）で読む方式へ変更。VS2022のMSBuildとNinja＋cl.exeもUTF-8で出力することを実測した。試験3件を追加し、全204件成功（3生成器の実ビルド、skipなし、382.8秒）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+- **Windowsのパス長の相談（未合意・未実装）**：CMake 4.2の `CMAKE_INTERMEDIATE_DIR_STRATEGY=SHORT` で `<Solution名>_<Project名>.dir` が短くなることを実測。案は[設計整理メモ](deliverables/DESIGN_NOTES.md)冒頭。
+
 ## 最新の追加（2026-10-03）
 
 - **Solutionの選択ビルドの不具合を修正（未コミット）**：`build_projects` でINTERFACE_LIBRARYだけを選ぶと依存先をビルドせず「ビルド済み」と記録していた（実装後の設計レビューの指摘を再現して確認）。依存の閉包をビルドするよう修正し、3生成器の実試験を追加。全201件成功（skipなし）、利用シナリオ全PASS。同レビューの他の指摘は未対応。`CLASS_DIAGRAM.md` はユーザーの指示で削除。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。

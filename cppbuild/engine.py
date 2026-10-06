@@ -6,6 +6,7 @@ operations therefore share the same outputs, and CMake orders dependencies.
 """
 from dataclasses import dataclass
 from pathlib import Path
+import locale
 import os
 import subprocess
 import sys
@@ -73,9 +74,31 @@ class FileOperationReport:
 def process(command, cwd, env=None):
     command = tuple(str(arg) for arg in command)
     result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, errors="replace", text=True, shell=False,
+                            stderr=subprocess.STDOUT, shell=False,
                             env=dict(os.environ) if env is None else env)
-    return ProcessReport(command, result.returncode, result.stdout)
+    return ProcessReport(command, result.returncode, decode_output(result.stdout))
+
+
+def decode_output(data):
+    """Decode tool output independently of Python's UTF-8 mode.
+
+    One Windows stream may mix encodings (MSBuild writes UTF-8; run programs
+    write anything), so each line is UTF-8 when valid, else the ANSI code page.
+    """
+    if os.name == "nt":
+        fallback = locale.getencoding()
+        lines = data.splitlines(keepends=True)
+        text = "".join(_decode_line(line, fallback) for line in lines)
+    else:
+        text = data.decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _decode_line(line, fallback):
+    try:
+        return line.decode("utf-8")
+    except UnicodeDecodeError:
+        return line.decode(fallback, errors="replace")
 
 
 # Sources ---------------------------------------------------------------------------

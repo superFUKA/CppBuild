@@ -1,11 +1,13 @@
 from pathlib import Path
+import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from cppbuild import ProjectBuildSettings, ProjectType as T, SettingsError, Solution
 from cppbuild.cmake_files import arg as _quote
-from cppbuild.engine import ProcessReport, _scan, tree
+from cppbuild.engine import ProcessReport, _scan, decode_output, process, tree
 
 
 class EngineUnitTests(unittest.TestCase):
@@ -106,3 +108,22 @@ class EngineUnitTests(unittest.TestCase):
                 self.app.update()
         call.assert_not_called()
         self.assertEqual(own.read_text(), "project(Mine)\n")
+
+
+class OutputDecodingTests(unittest.TestCase):
+    def test_windows_lines_fall_back_to_the_ansi_code_page_each(self):
+        data = "警告 utf-8\r\n".encode("utf-8") + "エラー cp932\r\n".encode("cp932") + b"end\r"
+        with patch("cppbuild.engine.os.name", "nt"), patch("cppbuild.engine.locale.getencoding", return_value="cp932"):
+            self.assertEqual(decode_output(data), "警告 utf-8\nエラー cp932\nend\n")
+
+    def test_undecodable_bytes_are_replaced(self):
+        with patch("cppbuild.engine.os.name", "nt"), patch("cppbuild.engine.locale.getencoding", return_value="ascii"):
+            self.assertEqual(decode_output(b"\xff ok\n"), "� ok\n")
+        with patch("cppbuild.engine.os.name", "posix"):
+            self.assertEqual(decode_output("ok 日本\r\n".encode("utf-8") + b"\xff\n"), "ok 日本\n�\n")
+
+    def test_process_reads_bytes_regardless_of_python_utf8_mode(self):
+        code = r"import sys; sys.stdout.buffer.write('日本語'.encode('utf-8') + b'\r\n' + '語'.encode('cp932'))"
+        with patch("cppbuild.engine.locale.getencoding", return_value="cp932"):
+            report = process([sys.executable, "-c", code], Path.cwd())
+        self.assertEqual(report.output, "日本語\n" + ("語" if os.name == "nt" else "��"))
