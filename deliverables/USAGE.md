@@ -64,7 +64,7 @@ project.set_build_settings(ProjectBuildSettings(artifact_directory="D:/CppBuild/
 - **廃止**：`ProjectBuildSettings.intermediate_directory` はなくなった（渡すと `TypeError`）。Projectごとの`.cppbuild/output`は使わない。
 - どちらも非保存で、再open後は既定値に戻る。set_build_settingsは設定全体の置き換え。
 - 所有マーカーのない既存ディレクトリや、別のSolution・生成環境の所有マーカーがあるツリーは使わずにエラーにする。出力領域はソース走査・テンプレートから除外する。
-- 出力先・ツリーを変えても旧生成物は削除しない。WindowsではCMake内部にも長いパスができるため、深いソース配置では短い絶対パスのツリーを指定する。
+- 出力先・ツリーを変えても旧生成物は削除しない。WindowsではCMake内部にも長いパスができるため、深いソース配置では短い絶対パスのツリーを指定する。目安はビルドツリーのパスがVSで約130文字、Ninjaで約155文字まで（長いパスを有効にしないWindowsでの実測）。これを超えるツリーで構成・ビルドが失敗すると、結果の出力の末尾に `Hint: the build tree path has N characters ...` の案内が付く。
 
 Windows、Python 3.11以上、Visual Studio 2022のC++ツールとWindows SDK、CMake/CTest 3.24以上を前提とする。実検証した環境は[実装記録](IMPLEMENTATION_STATUS.md)を参照。
 

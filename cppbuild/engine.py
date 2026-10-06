@@ -170,7 +170,7 @@ def configure(plan, settings):
         error = generators.verify(toolchain, compiler)
         if error is not None:
             result = ProcessReport(result.command, 1, result.output + "\n" + error)
-    return result, build, toolchain, compiler
+    return path_hint(result, build, toolchain), build, toolchain, compiler
 
 
 def codemodel(build):
@@ -245,7 +245,23 @@ def build_targets(settings, build, names, parallel=None):
     if names is not None:
         command += ["--target", *names]
     command += ["--parallel", parallel or settings.parallel]
-    return tooling.process(settings, command, build)
+    result = tooling.process(settings, command, build)
+    return result if result.success else path_hint(result, build, generators.resolve(settings))
+
+
+# Measured without long path support (CMake 4.2): VS failed in CMake's own
+# compiler checks from about 138 characters of build tree, Ninja from about 172.
+LONG_BUILD_TREE = {True: 130, False: 155}
+
+
+def path_hint(result, build, toolchain):
+    """Name the likely cause when a long Windows build tree fails cryptically."""
+    length = len(str(build))
+    if result.success or os.name != "nt" or length <= LONG_BUILD_TREE[toolchain.visual_studio]:
+        return result
+    hint = (f"Hint: the build tree path has {length} characters ({build}). Windows path length limits "
+            "may have caused this failure; set a shorter intermediate_directory in SolutionBuildSettings.")
+    return ProcessReport(result.command, result.returncode, result.output + "\n" + hint)
 
 
 # Operations ------------------------------------------------------------------------

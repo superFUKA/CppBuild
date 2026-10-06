@@ -3,7 +3,7 @@
 ## 最新の追加（2026-10-06）
 
 - **ビルド等の出力の文字化けを修正（未コミット）**：`engine.process()` を、バイト列で受けて行ごとにUTF-8→ANSIコードページ（置換あり）で読む方式へ変更。VS2022のMSBuildとNinja＋cl.exeもUTF-8で出力することを実測した。試験3件を追加し、全204件成功（3生成器の実ビルド、skipなし、382.8秒）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
-- **Windowsのパス長の相談（未合意・未実装）**：CMake 4.2の `CMAKE_INTERMEDIATE_DIR_STRATEGY=SHORT` で `<Solution名>_<Project名>.dir` が短くなることを実測。案は[設計整理メモ](deliverables/DESIGN_NOTES.md)冒頭。
+- **Windowsのパス長（失敗時の案内のみ実装、未コミット）**：実測すると、Solution名・Project名に関係なく、CMakeのコンパイラの確認がビルドツリーの長さ（VSで約138文字、Ninjaで約172文字）で先に失敗し、原因の分からないエラーになっていた。構成・ビルドが失敗し、ツリーが長いときに案内を出力へ付ける。SHORTと既定の置き場所の短縮は見送り。全205件成功（3生成器の実ビルド、skipなし）。詳細は[設計整理メモ](deliverables/DESIGN_NOTES.md)と[実装記録](deliverables/IMPLEMENTATION_STATUS.md)の冒頭。
 
 ## 最新の追加（2026-10-03）
 

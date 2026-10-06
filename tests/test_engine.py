@@ -3,11 +3,12 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cppbuild import ProjectBuildSettings, ProjectType as T, SettingsError, Solution
 from cppbuild.cmake_files import arg as _quote
-from cppbuild.engine import ProcessReport, _scan, decode_output, process, tree
+from cppbuild.engine import ProcessReport, _scan, decode_output, path_hint, process, tree
 
 
 class EngineUnitTests(unittest.TestCase):
@@ -108,6 +109,24 @@ class EngineUnitTests(unittest.TestCase):
                 self.app.update()
         call.assert_not_called()
         self.assertEqual(own.read_text(), "project(Mine)\n")
+
+
+class PathHintTests(unittest.TestCase):
+    def test_hint_only_for_failures_in_long_windows_trees(self):
+        failed, passed = ProcessReport(("cmake",), 1, "MSB4018"), ProcessReport(("cmake",), 0, "ok")
+        vs, ninja = SimpleNamespace(visual_studio=True), SimpleNamespace(visual_studio=False)
+        long_tree, short_tree = Path("C:/" + "d" * 140), Path("C:/b")
+        with patch("cppbuild.engine.os.name", "nt"):
+            hinted = path_hint(failed, long_tree, vs)
+            self.assertEqual(hinted.returncode, 1)
+            self.assertTrue(hinted.output.startswith("MSB4018\n"))
+            self.assertIn("intermediate_directory", hinted.output)
+            self.assertIs(path_hint(passed, long_tree, vs), passed)
+            self.assertIs(path_hint(failed, short_tree, vs), failed)
+            self.assertIs(path_hint(failed, long_tree, ninja), failed)
+            self.assertIsNot(path_hint(failed, Path("C:/" + "d" * 160), ninja), failed)
+        with patch("cppbuild.engine.os.name", "posix"):
+            self.assertIs(path_hint(failed, long_tree, vs), failed)
 
 
 class OutputDecodingTests(unittest.TestCase):
