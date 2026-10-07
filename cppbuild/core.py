@@ -166,6 +166,8 @@ class ProjectSettings(_Settings):
         for header in values.system_headers:
             if not header or any(c in header for c in '<>\r\n;"'):
                 raise SettingsError("Invalid system header")
+        if type(values.windows_export_all_symbols) is not bool:
+            raise SettingsError("windows_export_all_symbols must be boolean")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
@@ -180,6 +182,8 @@ class ProjectSettings(_Settings):
         raw.setdefault("guid", None)
         if version < 4:
             raw.setdefault("initial_type", None)
+        # Written only when enabled, so existing files and older readers are unaffected otherwise.
+        export_all = raw.pop("windows_export_all_symbols", False)
         storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers", "guid", "initial_type"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
@@ -209,7 +213,8 @@ class ProjectSettings(_Settings):
                        else ProjectType(default) if default is not None else None)
         except (TypeError, ValueError) as exc:
             raise SettingsError("Unsupported initial Project type") from exc
-        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default)
+        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default,
+                                    export_all)
         if version < 4:
             self._complete_types(values)
         self._validate(values, legacy=version < 3)
@@ -253,6 +258,8 @@ class ProjectSettings(_Settings):
                    "dependencies": {key: dependency_data.encode(value) for key, value in values.dependencies.items()},
                    "project_headers": values.project_headers, "system_headers": values.system_headers, "guid": values.guid,
                    "initial_type": values.initial_type.value}
+        if values.windows_export_all_symbols:
+            payload["windows_export_all_symbols"] = True
         documents[self.path] = storage.document(self.path, "project", payload, version=version)
         return documents
 
@@ -342,6 +349,12 @@ class ProjectSettings(_Settings):
 
     def clear_pch(self):
         return self.set_pch()
+
+    def set_windows_export_all_symbols(self, enabled=True):
+        """Export every symbol of the shared library on Windows (CMake's WINDOWS_EXPORT_ALL_SYMBOLS)."""
+        values = self.get()
+        values.windows_export_all_symbols = enabled
+        return self.save(values)
 
 
 class SolutionSettings(_Settings):

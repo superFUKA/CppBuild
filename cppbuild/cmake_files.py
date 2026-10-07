@@ -601,6 +601,8 @@ def _library(project, files, items):
                       f"    set(_cppbuild_output {arg(project.name + '-' + SUFFIX[kind])})",
                       "  endif()",
                       f"  set_target_properties({target} PROPERTIES OUTPUT_NAME ${{_cppbuild_output}})"]
+            if kind == ProjectType.SHARED_LIBRARY and data.windows_export_all_symbols:
+                lines.append(f"  set_target_properties({target} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)")
         lines += _target_body(project, kind, target, items, 2)
         lines.append("endif()")
     alias = alias_name(project)

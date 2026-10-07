@@ -1,5 +1,9 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-07）
+
+- **共有ライブラリの `WINDOWS_EXPORT_ALL_SYMBOLS`（未コミット）**：`project.settings.set_windows_export_all_symbols()`（Project単位の保存設定、既定False）で、生成する共有ライブラリのターゲットに `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付け、dllexportのないソースのまま静的⇔共有を切り替えられる。設定なしの `LNK1104` を実VS2022で再現・解消を確認。全207件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+
 ## 最新の追加（2026-10-06）
 
 - **ビルド等の出力の文字化けを修正（未コミット）**：`engine.process()` を、バイト列で受けて行ごとにUTF-8→ANSIコードページ（置換あり）で読む方式へ変更。VS2022のMSBuildとNinja＋cl.exeもUTF-8で出力することを実測した。試験3件を追加し、全204件成功（3生成器の実ビルド、skipなし、382.8秒）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。

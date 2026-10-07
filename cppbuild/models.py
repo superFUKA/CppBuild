@@ -88,6 +88,9 @@ class ProjectSettingsData:
     system_headers: list[str] = field(default_factory=list)
     guid: str = field(default_factory=lambda: str(uuid.uuid4()))
     initial_type: ProjectType | None = None
+    # WINDOWS_EXPORT_ALL_SYMBOLS on the shared library: a DLL and its import library
+    # without __declspec(dllexport). Other platforms export every symbol anyway.
+    windows_export_all_symbols: bool = False
 
 
 @dataclass

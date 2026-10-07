@@ -338,6 +338,7 @@ ecs.set_build_settings(SolutionBuildSettings(project_types={stl_guid: ProjectTyp
 - 最上位Solutionが自分で `link_solution` した所在は、探索ディレクトリより優先する（作業版を指す場合など）。
 - 探索対象は、探索ディレクトリ直下の各ディレクトリにある `.cppbuild/project.json`（Solution）だけ。再帰的には探さない。同じGUIDが2か所にあるとエラーになる。
 - 依存先Projectの `ProjectBuildSettings(project_type=...)` でも、静的⇔共有を切り替えられる。外部Solution内のProjectは、最上位の `project_types`（GUID指定）で切り替える。
+- 2026-10-07追加：Windowsで `__declspec(dllexport)` を付けていないライブラリを共有にすると、DLLにインポートライブラリ（.lib）ができず、利用側のリンクが `LNK1104` で失敗する。ライブラリProjectで `project.settings.set_windows_export_all_symbols()` を呼ぶと、生成する共有ライブラリのターゲットにCMakeの `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付け、ソースを変えずに静的⇔共有を切り替えられる。Project単位の保存する管理設定（`ProjectSettingsData.windows_export_all_symbols`、既定False、`False` を渡すと解除）で、生成ファイルに書くためCppBuildなしのビルドにも効く。静的・INTERFACEの形式とWindows以外には影響しない。Solution単位の設定は設けない（CppBuildなしでは、CMake標準の `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON` を構成時に渡せば全ターゲットに効く）。データメンバー（変数）は書き出されないため、DLL越しに使う変数には従来どおり `__declspec(dllimport)` が必要。
 
 # gitのURLによるリンクと自動取得（2026-10-03追加）
 

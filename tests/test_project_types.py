@@ -228,6 +228,49 @@ class ProjectTypeTests(unittest.TestCase):
         self.assertEqual(restored._resolved_build_settings().project_type, T.INTERFACE_LIBRARY)
         self.assertNotEqual(restored.settings.get().guid, guid)
 
+    def test_windows_export_all_symbols_is_saved_and_generated_for_shared_only(self):
+        from cppbuild import workspace
+        project = self.project
+        entry = project.root / "CMakeLists.txt"
+        self.assertNotIn("WINDOWS_EXPORT_ALL_SYMBOLS", workspace.plan(self.solution).documents()[entry])
+        self.assertNotIn("windows_export_all_symbols", storage.read_json(project.settings.path)["data"])
+        project.settings.set_windows_export_all_symbols()
+        self.assertTrue(storage.read_json(project.settings.path)["data"]["windows_export_all_symbols"])
+        project.settings.reload()
+        self.assertTrue(project.settings.get().windows_export_all_symbols)
+        text = workspace.plan(self.solution).documents()[entry]
+        self.assertEqual(text.count("WINDOWS_EXPORT_ALL_SYMBOLS ON"), 1)
+        shared = text.index("if(SHARED IN_LIST _cppbuild_types)")
+        self.assertTrue(shared < text.index("WINDOWS_EXPORT_ALL_SYMBOLS") < text.index("if(INTERFACE IN_LIST _cppbuild_types)"))
+        template = TemplateTools.create_solution_template(self.solution, self.root / "Template")
+        restored = Solution.create(self.root / "Restored", "Restored", template=template).get_project("Switch")
+        self.assertTrue(restored.settings.get().windows_export_all_symbols)
+        project.settings.set_windows_export_all_symbols(False)
+        self.assertNotIn("windows_export_all_symbols", storage.read_json(project.settings.path)["data"])
+        data = project.settings.get()
+        data.windows_export_all_symbols = 1
+        with self.assertRaises(SettingsError):
+            project.settings.save(data)
+        self.assertFalse(project.settings.get().windows_export_all_symbols)
+
+    @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
+    def test_real_windows_export_all_symbols_links_shared_without_dllexport(self):
+        project = self.project
+        project.add_file("include/api.hpp", content="#pragma once\nint value();\n", auto_update=False)
+        project.add_file("src/value.cpp", content='#include "api.hpp"\nint value() { return 42; }\n', auto_update=False)
+        app = self.solution.add_project("App", "App", T.EXECUTABLE)
+        app.settings.link_project(project, T.STATIC_LIBRARY)
+        app.add_file("src/main.cpp", content='#include "api.hpp"\nint main() { return value() == 42 ? 0 : 1; }', auto_update=False)
+        settings = SolutionBuildSettings(run_projects=["App"],
+                                         project_types={project.settings.get().guid: T.SHARED_LIBRARY})
+        self.solution.set_build_settings(settings)
+        # Without exports the DLL has no import library to link.
+        failed = self.solution.build()
+        self.assertFalse(failed.success)
+        self.assertIn("LNK1104", "\n".join(p.output for p in failed.processes))
+        project.settings.set_windows_export_all_symbols()
+        self.success(self.solution.run())
+
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
     def test_real_switch_libraries_and_link_each_kind(self):
         project = self.project

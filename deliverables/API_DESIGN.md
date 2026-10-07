@@ -281,6 +281,8 @@ GoogleTestとCTestの登録・実行を使い、結果XML等をライブラリ�
 
 project.settings.set_pch(project_headers=..., system_headers=...)／clear_pch()で保存し、update/buildで反映する。ヘッダー作成にはadd_fileを使い、専用作成APIは設けない。解除でヘッダーを消さない。種類別PCH・戻り値詳細は未確定。
 
+2026-10-07追加（PCHと同じ形の保存設定）：`project.settings.set_windows_export_all_symbols(enabled=True)` は `ProjectSettingsData.windows_export_all_symbols` を保存し、生成する共有ライブラリのターゲットへ `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付ける。`project.json` にはTrueのときだけ書く（既存ファイルの内容は変わらない）。
+
 <a id="environment"></a>
 
 ## ジャンル10：環境チェック

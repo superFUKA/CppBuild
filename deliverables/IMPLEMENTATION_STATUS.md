@@ -1,5 +1,11 @@
 # 実装・検証記録
 
+## 2026-10-07 共有ライブラリの WINDOWS_EXPORT_ALL_SYMBOLS
+
+- 要望（対象 `3d78db5`）：`project_types` で `SHARED_LIBRARY` を選ぶと、Windowsでは `__declspec(dllexport)` のない関数が書き出されず、インポートライブラリ（.lib）ができずに利用側のリンクが `LNK1104` で失敗する。VS2022の実ビルドで再現を確認した。
+- 実装：Project単位の保存する管理設定 `ProjectSettingsData.windows_export_all_symbols`（既定False）と `project.settings.set_windows_export_all_symbols(enabled=True)`。生成するProjectの `CMakeLists.txt` で、共有ライブラリのターゲットにだけ `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付ける（Windows以外ではCMakeが無視する）。非保存のビルド設定にしなかったのは、生成ファイルだけのCppBuildなしのビルドでも効かせるため。`project.json` にはTrueのときだけ書き、schema_versionは変えない（既存ファイル・既存の生成ファイルの内容は変わらない。Trueを書いたファイルは旧版のCppBuildでは読めない）。Solution単位の設定は設けない（素のcmakeでは標準の `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` で全体に効かせられる）。
+- 試験：`tests/test_project_types.py` に2件。保存・読み込み・解除・型検査・テンプレートでの引き継ぎと、生成内容が共有の分岐にだけ入ること。実VS2022で、dllexportなしの静的ライブラリを `project_types` で共有にすると `LNK1104` で失敗し、設定後は実行まで成功すること。全207件成功（3生成器の実ビルド、skipなし、432.0秒）。利用シナリオは未実行。未コミット。
+
 ## 2026-10-06 Windowsのパス長による失敗の案内
 
 - 検討と実測は[設計整理メモ](DESIGN_NOTES.md)冒頭。長いパスを有効にしないWindowsでは、Solution名・Project名に関係なく、CMakeのコンパイラの確認がビルドツリーの長さで先に失敗し、エラーから原因が読み取れなかった。
