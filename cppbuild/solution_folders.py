@@ -23,8 +23,10 @@ def validate(settings, projects):
         raise SettingsError("Expected SolutionFolderSettings or None")
     _folder(settings.projects)
     _folder(settings.linked_projects)
-    if settings.projects.casefold() == settings.linked_projects.casefold():
-        raise SettingsError("Local and linked solution folders must be distinct")
+    _folder(settings.external)
+    roots = [settings.projects.casefold(), settings.linked_projects.casefold(), settings.external.casefold()]
+    if len(set(roots)) != len(roots):
+        raise SettingsError("Local, linked and external solution folders must be distinct")
     if not isinstance(settings.project_folders, dict):
         raise SettingsError("project_folders must be a mapping")
     for name, folder in settings.project_folders.items():

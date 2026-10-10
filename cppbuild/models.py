@@ -98,6 +98,8 @@ class SolutionFolderSettings:
     projects: str = "Projects"
     linked_projects: str = "LinkedProjects"
     project_folders: dict[str, str] = field(default_factory=dict)
+    # Targets CppBuild brings in by itself, for this Solution and its linked Solutions (GoogleTest).
+    external: str = "External"
 
 
 @dataclass

@@ -317,6 +317,8 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 
 有効時は外部Solutionの全所属Projectを生成・表示し、ビルド参加は従来の所属・依存関係を維持する。パスの制約・種類選択・同名解決は [利用手順](USAGE.md) を参照。
 
+2026-10-11追加：`SolutionFolderSettings.external`（既定 `"External"`）。CppBuildが自分で取り込むターゲット（現在はGoogleTestの `gtest`・`gtest_main`。gmockを有効にすればそれも）を、この名前のルートフォルダーへ置く。リンク先のTESTが取り込むGoogleTestも、最上位Solutionのこのフォルダーへ置く。単一階層の名前で、`projects`・`linked_projects` と同名にできない。`solution_folders=None` のときは従来どおり。
+
 ## 2026-09-30追加：GUIDと外部リンクの自動管理
 
 - 2026-09-30の追加指示により名前指定を廃止。`link_solution(config_directory, link_type)` の2引数で使用し、`name` 引数は受け付けない。同じ対象GUID・同所在は自動で共用し、同じGUIDの異なる所在は拒否する。ただし、ビルドなどの依存解決では操作を始めた最上位Solution（Solution操作ではそのSolution、Project操作では所属Solution）の参照一覧に登録されたGUIDは、入れ子の依存先が自分の参照一覧で別の所在に登録していても、最上位の所在を優先して使用する。同一Project内の同GUID・同種類の再登録はエラー。ビルド対象もGUIDと種類で集約する。

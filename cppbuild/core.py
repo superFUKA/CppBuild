@@ -428,7 +428,8 @@ class SolutionSettings(_Settings):
             folder = raw["solution_folders"]
             if not isinstance(folder, dict):
                 raise SettingsError("Expected solution folder object")
-            storage.object_fields(folder, {"projects", "linked_projects", "project_folders"})
+            folder.setdefault("external", "External")
+            storage.object_fields(folder, {"projects", "linked_projects", "project_folders", "external"})
             raw["solution_folders"] = SolutionFolderSettings(**folder)
         values = SolutionSettingsData(**raw)
         self._validate(values, legacy=version < 3)
@@ -483,6 +484,8 @@ class SolutionSettings(_Settings):
             del data["dependency_directories"]
         if not data["git_sources"]:
             del data["git_sources"]
+        if data["solution_folders"] is not None and data["solution_folders"]["external"] == "External":
+            del data["solution_folders"]["external"]
         return storage.document(self.path, "solution", data)
 
     def set_file_template(self, name, template_file):

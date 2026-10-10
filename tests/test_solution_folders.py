@@ -45,6 +45,36 @@ class SolutionFolderTests(unittest.TestCase):
         path.write_text(json.dumps(data))
         self.assertIsNone(Solution.open(path.parent).settings.get().solution_folders)
 
+    def test_external_folder_saved_only_when_renamed(self):
+        self.configure()
+        path = self.solution.settings.path
+        self.assertNotIn("external", json.loads(path.read_text())["data"]["solution_folders"])
+        self.assertEqual(Solution.open(path.parent).settings.get().solution_folders.external, "External")
+        values = self.solution.settings.get()
+        values.solution_folders.external = "Third Party"
+        self.solution.settings.save(values)
+        self.assertEqual(json.loads(path.read_text())["data"]["solution_folders"]["external"], "Third Party")
+        self.assertEqual(Solution.open(path.parent).settings.get().solution_folders.external, "Third Party")
+        for value in ["My Projects", "linked projects", "A/B", ""]:
+            with self.subTest(value=value), self.assertRaises(SettingsError):
+                values.solution_folders.external = value
+                self.solution.settings.save(values)
+
+    def test_external_folder_generation(self):
+        tests = self.external.add_project("Tests", "Tests", T.TEST)
+        plan = workspace.plan(self.solution)
+        top = plan.documents()[self.solution.root / "CppBuildTopLevel.cmake"]
+        self.assertNotIn("CPPBUILD_EXTERNAL_FOLDER", top)
+        self.configure()
+        plan = workspace.plan(self.solution)
+        documents = plan.documents()
+        top = documents[self.solution.root / "CppBuildTopLevel.cmake"]
+        # Set before the linked Solutions are added, so their GoogleTest goes there too.
+        self.assertLess(top.index('set(CPPBUILD_EXTERNAL_FOLDER "External")'), top.index("add_subdirectory("))
+        text = documents[tests.root / "CMakeLists.txt"]
+        self.assertLess(text.index('set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}")'), text.index("FetchContent_MakeAvailable"))
+        self.assertLess(text.index("FetchContent_MakeAvailable"), text.index('set(CMAKE_FOLDER "${_cppbuild_folder}")'))
+
     def test_invalid_paths_members_and_root_collisions(self):
         for value in ["../Outside", "/Root", "C:/Root", "A//B", "A\\B", "A/..", "A;B", "A\nB"]:
             with self.subTest(value=value), self.assertRaises(SettingsError):
@@ -159,3 +189,26 @@ class SolutionFolderTests(unittest.TestCase):
         text = sln.read_text(encoding="utf-8-sig")
         self.assertNotIn("NestedProjects", text)
         self.assertNotIn("Unused.vcxproj", text)
+
+    @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
+    def test_real_googletest_of_linked_solution_in_external_folder(self):
+        # Only the linked Solution has a TEST Project: its GoogleTest still goes in this Solution's folder.
+        tests = self.external.add_project("Tests", "Tests", T.TEST)
+        tests.add_file("src/test.cpp", content="#include <gtest/gtest.h>\nTEST(A, B) { EXPECT_TRUE(true); }\n", auto_update=False)
+        self.configure()
+        values = self.solution.settings.get()
+        values.solution_folders.external = "Third Party"
+        self.solution.settings.save(values)
+        report = self.solution.update()
+        self.assertTrue(report.success, str(report))
+        sln = next((self.solution.root / ".cppbuild/output").rglob("Main.sln"))
+        text = sln.read_text(encoding="utf-8-sig")
+        entries = re.findall(r'Project\("\{[^}]+\}"\) = "([^"]+)", "([^"]+)", "\{([^}]+)\}"', text)
+        folders = {name: guid for name, path, guid in entries if not path.endswith(".vcxproj")}
+        parents = dict(re.findall(r'\{([^}]+)\} = \{([^}]+)\}', text))
+        self.assertNotIn(folders["Third Party"], parents)
+        placed = {Path(path).stem: parents.get(guid) for _, path, guid in entries if path.endswith(".vcxproj")}
+        self.assertEqual(placed["gtest"], folders["Third Party"])
+        self.assertEqual(placed["gtest_main"], folders["Third Party"])
+        self.assertEqual(placed["External_Tests"], folders["External"])
+        self.assertEqual(placed["Main_App"], folders["Tools"])

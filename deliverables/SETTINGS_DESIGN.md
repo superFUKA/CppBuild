@@ -124,6 +124,8 @@ gtest_discover_testsはビルド済みテスト実行ファイルを使う。upd
 
 SolutionSettingsDataに `solution_folders` を追加。`None` または `SolutionFolderSettings`（`projects`、`linked_projects`、`project_folders`）を保存する。旧管理ファイルで項目がない場合は `None` として読む。ビルド設定には含めない。設定のコピー分離・検証・競合検出は既存のget/saveに従う。テンプレートに含め、登録解除時にそのProjectの配置指定を除く。
 
+2026-10-11追加：`SolutionFolderSettings.external`（既定 `"External"`、CppBuildが取り込むGoogleTest等の表示先）。既定値のときは `project.json` に書かず、項目がない旧ファイルは既定値として読む（schema_versionは変えない。既定以外を書いたファイルは旧版のCppBuildでは読めない）。
+
 ## 2026-09-30更新：GUIDによる参照の保存（schema_version=3）
 
 - Project管理ファイルにUUID形式の `guid` を保存する。新規作成で発行し、通常saveでの変更は禁止。Project移動で保持し、テンプレート作成・復元では所属Projectごとに新規発行して内部依存を付け替える。

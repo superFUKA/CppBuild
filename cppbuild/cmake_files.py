@@ -258,6 +258,9 @@ def top_level(plan):
               "    enable_testing()",
               "  endif()",
               "endif()"]
+    if data.solution_folders is not None:
+        lines += ["", "# IDE folder of the targets CppBuild brings in, here and in linked Solutions (GoogleTest).",
+                  f"set(CPPBUILD_EXTERNAL_FOLDER {arg(data.solution_folders.external)})"]
     sources = plan.git_sources()
     if sources:
         lines += ["", "# Linked Solutions in git repositories, including the ones linked Solutions record.",
@@ -479,7 +482,15 @@ def _test_setup():
             "  endif()",
             f'  FetchContent_Declare(googletest URL "${{_cppbuild_googletest_url}}" URL_HASH SHA256={GOOGLETEST_SHA256}',
             "    DOWNLOAD_EXTRACT_TIMESTAMP TRUE TIMEOUT 60 INACTIVITY_TIMEOUT 15)",
+            "  if(DEFINED CPPBUILD_EXTERNAL_FOLDER)",
+            "    # Set by the top-level Solution when it lays out solution folders.",
+            '    set(_cppbuild_folder "${CMAKE_FOLDER}")',
+            '    set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}")',
+            "  endif()",
             "  FetchContent_MakeAvailable(googletest)",
+            "  if(DEFINED CPPBUILD_EXTERNAL_FOLDER)",
+            '    set(CMAKE_FOLDER "${_cppbuild_folder}")',
+            "  endif()",
             "endif()"]
 
 

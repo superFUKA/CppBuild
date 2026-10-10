@@ -1,5 +1,9 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-11）
+
+- **CppBuildが取り込むターゲットのフォルダー（未コミット）**：`SolutionFolderSettings.external`（既定 `"External"`）。フォルダー分けが有効なとき、GoogleTest（`gtest`・`gtest_main`）を、リンク先が取り込む分も含めて最上位Solutionのこのフォルダーへ置く。無効時は従来どおり。全210件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+
 ## 最新の追加（2026-10-07）
 
 - **共有ライブラリの `WINDOWS_EXPORT_ALL_SYMBOLS`（未コミット）**：`project.settings.set_windows_export_all_symbols()`（Project単位の保存設定、既定False）で、生成する共有ライブラリのターゲットに `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付け、dllexportのないソースのまま静的⇔共有を切り替えられる。設定なしの `LNK1104` を実VS2022で再現・解消を確認。全207件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。

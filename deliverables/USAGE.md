@@ -173,12 +173,15 @@ settings.solution_folders = SolutionFolderSettings(
     projects="Projects",
     linked_projects="LinkedProjects",
     project_folders={"App": "Apps/Tools", "Core": "Libraries"},
+    external="External",  # 省略時も External
 )
 solution.settings.save(settings)
 report = solution.update()
 ```
 
-`project_folders` のキーは自分の所属Project名。値は `Projects` 配下の `/` 区切り相対階層で、未指定・空文字列なら直下。絶対パス・`..`・外部Project名は拒否する。ルートの二つのフォルダー名は単一階層で、同名にできない。
+`project_folders` のキーは自分の所属Project名。値は `Projects` 配下の `/` 区切り相対階層で、未指定・空文字列なら直下。絶対パス・`..`・外部Project名は拒否する。ルートの三つのフォルダー名（`projects`・`linked_projects`・`external`）は単一階層で、互いに同名にできない。
+
+`external` には、CppBuildが自分で取り込むもの（GoogleTestの `gtest`・`gtest_main`）を置く。リンク先SolutionのTESTが取り込むGoogleTestも、最上位Solutionのこのフォルダーへ入る（リンク先の設定は使わない）。素のcmakeでは `CppBuildTopLevel.cmake` の `CPPBUILD_EXTERNAL_FOLDER` で決まる。2026-10-11追加。
 
 リンク先は `LinkedProjects/<相手のSolution名>` に全所属Projectを表示する。間接リンク先も同じ階層へ集約し、同じSolutionは重複表示しない。同名の別Solutionはパス由来の短い識別子を表示名へ付ける。表示用に追加した未参照Projectは通常のビルド対象に加えない（CMakeの `EXCLUDE_FROM_ALL`／`EXCLUDE_FROM_DEFAULT_BUILD`）が、表示する `.vcxproj` の生成には、そのProjectの有効な設定・ソース・外部依存が必要になる。TESTの構成ではGoogleTestの取得が必要になり得る。2026-10-01更新：フォルダーはCMakeの `FOLDER`（`CMAKE_FOLDER`）で表す。生成ファイルは生成器に依存しないため、Ninjaでも未参照Projectを構成する（ビルドはしない）。2026-10-03更新：未参照Projectが必要とする依存先の形式も、通常のビルド対象に加えない（実際の依存で使う形式だけを作る）。未参照Projectの実行ファイル・DLLは `bin/_linked/<リンク先Solution>/<構成>` に出し、利用側の同名実行ファイル（例：両方のSolutionの `App`）と衝突させない。同名の共有ライブラリ（DLL名の衝突）は、表示用でも従来どおりエラーにする。
 
