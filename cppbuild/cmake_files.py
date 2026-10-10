@@ -252,14 +252,16 @@ def top_level(plan):
               '    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")',
               "  endif()"]
     if data.solution_folders is not None:
-        lines.append("  set_property(GLOBAL PROPERTY USE_FOLDERS ON)")
+        lines += ["  set_property(GLOBAL PROPERTY USE_FOLDERS ON)",
+                  "  # ALL_BUILD, ZERO_CHECK, RUN_TESTS and the like, beside the other targets CppBuild did not write.",
+                  f"  set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER {arg(data.solution_folders.external + '/CMake')})"]
     lines += ['  option(BUILD_TESTING "Build and register the TEST Projects (GoogleTest is fetched only when ON)" ON)',
               "  if(BUILD_TESTING)",
               "    enable_testing()",
               "  endif()",
               "endif()"]
     if data.solution_folders is not None:
-        lines += ["", "# IDE folder of the targets CppBuild brings in, here and in linked Solutions (GoogleTest).",
+        lines += ["", "# IDE folder of the targets CppBuild brings in, here and in linked Solutions (<folder>/GoogleTest).",
                   f"set(CPPBUILD_EXTERNAL_FOLDER {arg(data.solution_folders.external)})"]
     sources = plan.git_sources()
     if sources:
@@ -485,7 +487,7 @@ def _test_setup():
             "  if(DEFINED CPPBUILD_EXTERNAL_FOLDER)",
             "    # Set by the top-level Solution when it lays out solution folders.",
             '    set(_cppbuild_folder "${CMAKE_FOLDER}")',
-            '    set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}")',
+            '    set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}/GoogleTest")',
             "  endif()",
             "  FetchContent_MakeAvailable(googletest)",
             "  if(DEFINED CPPBUILD_EXTERNAL_FOLDER)",

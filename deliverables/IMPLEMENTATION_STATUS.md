@@ -5,6 +5,7 @@
 - 要望：フォルダー分けが有効なとき、CppBuildが自分で取り込むもの（現在はGoogleTestの `gtest`・`gtest_main`）を専用のフォルダーへ置く。リンク先が取り込むGoogleTestも同じ所へ。名前は設定で変えられ、既定は External。無効時は従来どおり。
 - 従来（実VS2022で確認）：GoogleTestは最初に構成されたTESTの `CMakeLists.txt` で `FetchContent_MakeAvailable` され、その場の `CMAKE_FOLDER`（`Projects/…` や `LinkedProjects/<Solution名>`）に入っていた。
 - 実装：保存する表示設定 `SolutionFolderSettings.external`（既定 `"External"`、既定値のときは保存しない、schema_version据え置き）。最上位の `CppBuildTopLevel.cmake` が、リンク先を加える前に `CPPBUILD_EXTERNAL_FOLDER` を設定し、TESTの生成ファイルは、定義されていれば取り込みの間だけ `CMAKE_FOLDER` をそれに切り替えて戻す。リンク先は自分の `CppBuildTopLevel.cmake` を読まないため、最上位の名前が使われる。`CMAKE_FOLDER` で切り替えるので、gmockを有効にすればそれも同じフォルダーに入る。
+- 追加（同日、ユーザーの指摘）：CMakeの既定ターゲット（ALL_BUILD・ZERO_CHECK・RUN_TESTS等）が `CMakePredefinedTargets` に残っていたため、最上位として構成するときに `PREDEFINED_TARGETS_FOLDER` で `<external>/CMake` へ移す。External内は作ったものごとに分け、GoogleTestは `<external>/GoogleTest` とした。実VS2022の試験に、両サブフォルダーの位置と `CMakePredefinedTargets` がないことの確認を追加。全210件中209件成功（3生成器の実ビルド、skipなし、551.1秒）。失敗した1件（`test_output_paths` のNinja実試験）は、実行した直後のApp.exeを書き込めない `LNK1168` で、単独で3回再実行して成功した。同じ `LNK1168` は `test_solution_folders` の既存実試験でも1回出て、再実行で成功している。exeを開いたままにしているもの（ウイルス対策等）は特定していない。
 - 対象外：`link_cmake_source` で利用者が指定した外部CMakeソースは、利用者が追加したものとして従来どおり（加えたProjectのフォルダー）。`CPPBUILD_FORMAT` は上げていない（旧版で生成したリンク先のGoogleTestは従来のフォルダーのまま）。
 - 試験：`tests/test_solution_folders.py` に3件（保存・検証、生成内容、実VS2022でリンク先だけにTESTがある場合に `gtest`・`gtest_main` が名前を変えた最上位フォルダーへ入ること）。実試験は変更前の生成コードで失敗することを確認した。全210件成功（3生成器の実ビルド、skipなし、553.0秒、GoogleTestはオンライン取得）。利用シナリオは未実行。未コミット。
 

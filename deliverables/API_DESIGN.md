@@ -317,7 +317,7 @@ solution.on(event, callback)は登録IDを返し、solution.off(registration_id)
 
 有効時は外部Solutionの全所属Projectを生成・表示し、ビルド参加は従来の所属・依存関係を維持する。パスの制約・種類選択・同名解決は [利用手順](USAGE.md) を参照。
 
-2026-10-11追加：`SolutionFolderSettings.external`（既定 `"External"`）。CppBuildが自分で取り込むターゲット（現在はGoogleTestの `gtest`・`gtest_main`。gmockを有効にすればそれも）を、この名前のルートフォルダーへ置く。リンク先のTESTが取り込むGoogleTestも、最上位Solutionのこのフォルダーへ置く。単一階層の名前で、`projects`・`linked_projects` と同名にできない。`solution_folders=None` のときは従来どおり。
+2026-10-11追加：`SolutionFolderSettings.external`（既定 `"External"`）。CppBuildが自分で取り込むターゲット（現在はGoogleTestの `gtest`・`gtest_main`。gmockを有効にすればそれも）を、この名前のルートフォルダーへ置く。リンク先のTESTが取り込むGoogleTestも、最上位Solutionのこのフォルダーへ置く。2026-10-11更新：作ったものごとに分け、CMakeが作るターゲット（ALL_BUILD・ZERO_CHECK・RUN_TESTS等、従来の `CMakePredefinedTargets`）は `<external>/CMake`、GoogleTestは `<external>/GoogleTest` に置く。単一階層の名前で、`projects`・`linked_projects` と同名にできない。`solution_folders=None` のときは従来どおり。
 
 ## 2026-09-30追加：GUIDと外部リンクの自動管理
 

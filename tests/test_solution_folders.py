@@ -65,6 +65,7 @@ class SolutionFolderTests(unittest.TestCase):
         plan = workspace.plan(self.solution)
         top = plan.documents()[self.solution.root / "CppBuildTopLevel.cmake"]
         self.assertNotIn("CPPBUILD_EXTERNAL_FOLDER", top)
+        self.assertNotIn("PREDEFINED_TARGETS_FOLDER", top)
         self.configure()
         plan = workspace.plan(self.solution)
         documents = plan.documents()
@@ -72,7 +73,8 @@ class SolutionFolderTests(unittest.TestCase):
         # Set before the linked Solutions are added, so their GoogleTest goes there too.
         self.assertLess(top.index('set(CPPBUILD_EXTERNAL_FOLDER "External")'), top.index("add_subdirectory("))
         text = documents[tests.root / "CMakeLists.txt"]
-        self.assertLess(text.index('set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}")'), text.index("FetchContent_MakeAvailable"))
+        self.assertIn('set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "External/CMake")', top)
+        self.assertLess(text.index('set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}/GoogleTest")'), text.index("FetchContent_MakeAvailable"))
         self.assertLess(text.index("FetchContent_MakeAvailable"), text.index('set(CMAKE_FOLDER "${_cppbuild_folder}")'))
 
     def test_invalid_paths_members_and_root_collisions(self):
@@ -208,7 +210,12 @@ class SolutionFolderTests(unittest.TestCase):
         parents = dict(re.findall(r'\{([^}]+)\} = \{([^}]+)\}', text))
         self.assertNotIn(folders["Third Party"], parents)
         placed = {Path(path).stem: parents.get(guid) for _, path, guid in entries if path.endswith(".vcxproj")}
-        self.assertEqual(placed["gtest"], folders["Third Party"])
-        self.assertEqual(placed["gtest_main"], folders["Third Party"])
+        self.assertEqual(parents[folders["GoogleTest"]], folders["Third Party"])
+        self.assertEqual(parents[folders["CMake"]], folders["Third Party"])
+        self.assertEqual(placed["gtest"], folders["GoogleTest"])
+        self.assertEqual(placed["gtest_main"], folders["GoogleTest"])
+        self.assertEqual(placed["ALL_BUILD"], folders["CMake"])
+        self.assertEqual(placed["ZERO_CHECK"], folders["CMake"])
+        self.assertNotIn("CMakePredefinedTargets", folders)
         self.assertEqual(placed["External_Tests"], folders["External"])
         self.assertEqual(placed["Main_App"], folders["Tools"])

@@ -98,7 +98,8 @@ class SolutionFolderSettings:
     projects: str = "Projects"
     linked_projects: str = "LinkedProjects"
     project_folders: dict[str, str] = field(default_factory=dict)
-    # Targets CppBuild brings in by itself, for this Solution and its linked Solutions (GoogleTest).
+    # Targets CppBuild did not write, for this Solution and its linked Solutions: <external>/CMake
+    # (ALL_BUILD, ZERO_CHECK, ...) and <external>/GoogleTest (gtest, gtest_main).
     external: str = "External"
 
 

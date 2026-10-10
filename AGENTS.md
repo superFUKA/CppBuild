@@ -2,7 +2,7 @@
 
 ## 最新の追加（2026-10-11）
 
-- **CppBuildが取り込むターゲットのフォルダー（未コミット）**：`SolutionFolderSettings.external`（既定 `"External"`）。フォルダー分けが有効なとき、GoogleTest（`gtest`・`gtest_main`）を、リンク先が取り込む分も含めて最上位Solutionのこのフォルダーへ置く。無効時は従来どおり。全210件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+- **CppBuildが書いていないターゲットのフォルダー（`2b901f1` でコミット済み、CMakeの既定ターゲットの分は未コミット）**：`SolutionFolderSettings.external`（既定 `"External"`）。フォルダー分けが有効なとき、GoogleTest（`gtest`・`gtest_main`）を、リンク先が取り込む分も含めて最上位Solutionのこのフォルダーの `GoogleTest` へ、CMakeの既定ターゲット（ALL_BUILD等）を `CMake` へ置く（後者は未コミット）。無効時は従来どおり。全210件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
 
 ## 最新の追加（2026-10-07）
 
