@@ -615,7 +615,9 @@ def project_entry(project, providers):
         if initial == ProjectType.TEST:
             lines += [""] + _test_setup()
         lines += ["", f"add_executable({target} ${{_cppbuild_sources}})",
-                  f"set_target_properties({target} PROPERTIES OUTPUT_NAME {arg(project.name)})"]
+                  f"set_target_properties({target} PROPERTIES OUTPUT_NAME {arg(project.name)})",
+                  "# Visual Studio debugs in the Project directory, where CppBuild's run and the tests start too.",
+                  f'set_target_properties({target} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}")']
         lines += _target_body(project, initial, target, items, 0)
         lines += ["if(DISPLAY IN_LIST CPPBUILD_REQUESTED AND NOT CPPBUILD_WHOLE_SOLUTION)",
                   "  # Listed for the IDE only: shown, but not part of the default build.",

@@ -1,5 +1,11 @@
 # 設計整理メモ
 
+## 2026-10-12調査：コンパイラ情報のFile APIへの移行（未着手、判断待ち）
+
+- 現状：`generators.compiler()` がCMakeの内部ファイル `CMakeFiles/<版>/CMakeCXXCompiler.cmake`・`CMakeSystem.cmake` を正規表現で読み、種類・版・パス・アーキテクチャを得て、`generators.verify()` で要求した環境と照合している。[CMakeラッパーのレビュー](CMAKE_WRAPPER_REVIEW_2026-10-03.md)の最優先の指摘。
+- 実測（CMake 4.2.3、VS2022・Win32）：File APIの `toolchains-v1` は、CXXの `compiler.id`（MSVC）・`version`・`path` を返すが、アーキテクチャは返さない。`cache-v2` には `CMAKE_GENERATOR_PLATFORM`（VSの `-A`）があるが、Ninjaではvcvarsの環境で決まるため、公式の取得方法がない。
+- 判断が要る点：種類・版・パスだけFile APIへ移し、アーキテクチャは（a）VSは `CMAKE_GENERATOR_PLATFORM`、Ninjaは照合をやめる、（b）内部ファイルの読み取りをアーキテクチャだけに残す、（c）生成CMakeに検出値を出力させる（ただし `CMAKE_CXX_COMPILER_ARCHITECTURE_ID` 自体もCMakeの内部扱いの変数）、のどれにするか。
+
 ## 2026-10-12相談：ソースファイルの一覧を生成ファイルに書かない（実装済み）
 
 - 判断：ユーザーの選択により、ソース一覧を生成ファイルへ書く方式から、CMakeが `file(GLOB … CONFIGURE_DEPENDS)` で集める方式へ変更した。[CMakeラッパーのレビュー](CMAKE_WRAPPER_REVIEW_2026-10-03.md)の「GLOBへの一律置き換えは勧めない」と、[更新・ビルド詳細案](BUILD_DESIGN.md)の「自動GLOBで走査範囲を暗黙に拡大しない」は、この判断で置き換える（集める範囲はCppBuildの走査と同じにしたので、範囲は広がらない）。

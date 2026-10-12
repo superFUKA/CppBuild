@@ -1,5 +1,12 @@
 # 実装・検証記録
 
+## 2026-10-12 Visual Studioのデバッグ時の作業ディレクトリ
+
+- 問題（コードと生成物で確認）：CppBuildの `run` はProjectのディレクトリでプログラムを起動し（`engine.run_command`）、テストの探索も `WORKING_DIRECTORY` にProjectのディレクトリを使うが、生成したvcxprojには `LocalDebuggerWorkingDirectory` がなく、F5ではVSの既定（`$(ProjectDir)`、ビルドツリー側）で起動していた。相対パスでファイルを読むプログラムは、CppBuildでは動きF5では動かない。
+- 修正：実行ファイル・TESTのターゲットに `VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"` を付ける。保存した設定だけで決まる。`run` がPATHへ足すDLLのディレクトリ（`artifact_directory` を選んだ場合）は保存しない設定なので対象外。
+- 試験：`tests/test_startup_project.py` に単体1件（TESTに付き、ライブラリに付かないこと）と、実VS2022・VS2026でvcxprojの4構成すべての `LocalDebuggerWorkingDirectory` がProjectのディレクトリになることの確認を追加。修正を外すと実試験が失敗する（指定が0件）ことを確認した。VS上でF5を押す操作そのものは試していない。全220件成功（3生成器の実ビルド、skipなし、468.8秒）。未コミット。
+- 利用シナリオ（`usage_tests/`、オンライン取得）：この修正を含む状態で、VS2022・Ninja Multi-Config・VS2026のそれぞれで全7シナリオPASS（`.test-work/usage-20261012-175414-443168`、`-175623-926387`、`-175814-203980`）。10-06以降の変更（文字コード、パス長の案内、WINDOWS_EXPORT_ALL_SYMBOLS、Externalフォルダー、起動対象、ソースの収集）を通した初めての利用シナリオの実行。
+
 ## 2026-10-12 ソースファイルをCMake側で集める（ファイル一覧を生成ファイルに書かない）
 
 - 要望：ファイルの追加・削除のたびに、各Projectの生成 `CMakeLists.txt` が書き換わる。フィルタはディレクトリ構成のままなので、一覧を書かずに済ませたい。CMake公式がGLOBを勧めない理由を説明した上で、ユーザーが案A（`CONFIGURE_DEPENDS` で集める）を選んだ。

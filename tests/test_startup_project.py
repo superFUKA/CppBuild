@@ -58,6 +58,13 @@ class StartupProjectTests(_Demo, unittest.TestCase):
         self.lib.settings.link_solution(other.root / ".cppbuild", T.STATIC_LIBRARY)
         self.assertNotIn("VS_STARTUP_PROJECT", self.entry())
 
+    def test_programs_are_debugged_in_their_project_directory(self):
+        tests = self.solution.add_project("Tests", "Tests", T.TEST)
+        line = 'set_target_properties(Demo_Tests PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")'
+        documents = workspace.plan(self.solution).documents()
+        self.assertIn(line, documents[tests.root / "CMakeLists.txt"])
+        self.assertNotIn("VS_DEBUGGER_WORKING_DIRECTORY", documents[self.lib.root / "CMakeLists.txt"])
+
 
 def startup_of(build):
     """The project Visual Studio starts: the first project of a .sln, DefaultStartup in a .slnx."""
@@ -88,6 +95,12 @@ class _RealStartup(_Demo):
         report = app.update()  # the Solution's one build tree
         self.assertTrue(report.success, str(report))
         self.assertEqual(startup_of(report.build_directory), "Demo_Tests")
+        # F5 starts a program in its Project directory, as CppBuild's run does.
+        for project in (app, tests):
+            text = (report.build_directory / project.name / f"Demo_{project.name}.vcxproj").read_text(encoding="utf-8-sig")
+            found = re.findall(r"<LocalDebuggerWorkingDirectory[^>]*>([^<]*)</LocalDebuggerWorkingDirectory>", text)
+            self.assertEqual(len(found), 4, "one per configuration")  # Debug, Release, RelWithDebInfo, MinSizeRel
+            self.assertEqual({Path(p).resolve() for p in found}, {project.root.resolve()})
         # Plain CMake without tests: the TEST target is missing, so the next program is started.
         toolchain = generators.resolve(settings)
         build = self.root / "no-tests"
