@@ -161,9 +161,7 @@ def configure(plan, settings):
     storage.atomic_write(marker, storage.encoded(owner))
     cache = build / CACHE
     storage.atomic_write(cache, plan.cache_script(toolchain).encode("utf-8"))
-    query = build / ".cmake/api/v1/query/client-cppbuild/codemodel-v2"
-    query.parent.mkdir(parents=True, exist_ok=True)
-    query.touch()
+    generators.request_file_api(build, "codemodel-v2", "toolchains-v1")
     result = tooling.process(settings, [*toolchain.configure(solution.root, build), "-C", cache], solution.root)
     compiler = None
     if result.success:
@@ -175,13 +173,10 @@ def configure(plan, settings):
 
 
 def codemodel(build):
-    reply = build / ".cmake/api/v1/reply"
-    indexes = sorted(reply.glob("index-*.json"))
-    if not indexes:
+    found = generators.file_api_reply(build, "codemodel-v2")
+    if found is None:
         raise SettingsError("CMake File API did not return a codemodel")
-    index = storage.read_json(indexes[-1])
-    reference = index["reply"]["client-cppbuild"]["codemodel-v2"]["jsonFile"]
-    return reply, storage.read_json(storage.contained(reply, reference))
+    return found
 
 
 def target_data(build, name, configuration):

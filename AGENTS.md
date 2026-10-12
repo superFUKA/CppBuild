@@ -2,6 +2,7 @@
 
 ## 最新の追加（2026-10-12）
 
+- **コンパイラ情報をFile APIから読む（未コミット）**：種類・版・パスは `toolchains-v1`、アーキテクチャだけ従来どおりCMakeの記録から（ユーザー選択の案(b)）。全220件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
 - **VSのデバッグ時の作業ディレクトリ（未コミット）**：実行ファイル・TESTに `VS_DEBUGGER_WORKING_DIRECTORY` をProjectのディレクトリとして付け、F5でもCppBuildの `run` と同じ場所で起動する。全220件成功（3生成器の実ビルド、skipなし）。利用シナリオ7件が3生成器で全PASS（10-06以降の変更を通して初）。コンパイラ情報のFile APIへの移行は調査のみ（設計整理メモ冒頭）。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
 - **ソースファイルをCMake側で集める（未コミット）**：生成するProjectの `CMakeLists.txt` にはファイル一覧を書かず、`source_directories` だけを書く。CMakeが `file(GLOB … CONFIGURE_DEPENDS)` でCppBuildの走査と同じ規則で集めるので、ファイルの追加・削除では生成ファイルが変わらず、CppBuildなしのビルドも追加・削除に気づく。何も変わっていないビルドが実測で0.02〜0.08秒遅くなる。全219件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。判断は[設計整理メモ](deliverables/DESIGN_NOTES.md)冒頭、詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
 - **Visual Studioの起動対象（`0b07c45` でコミット済み）**：生成するSolutionの `CMakeLists.txt` が `VS_STARTUP_PROJECT` を設定する。`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（Project名順）のうち構成された最初。F5でALL_BUILDが起動され「プログラムを開始できません」になる不具合の修正。全214件成功（3生成器の実ビルド、skipなし）。利用シナリオ・VS上のF5操作は未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。

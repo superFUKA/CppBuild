@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 from .models import CMakeSettings, SettingsError
-from . import tooling
+from . import storage, tooling
 
 VISUAL_STUDIO = {"Visual Studio 17 2022": ("vs2022", ".sln"), "Visual Studio 18 2026": ("vs2026", ".slnx")}
 NINJA_MULTI_CONFIG = "Ninja Multi-Config"
@@ -278,8 +278,50 @@ def _run_vcvars(vcvars, argument, toolset, env):
     return values
 
 
+# CMake File API ----------------------------------------------------------------------
+
+FILE_API_CLIENT = "client-cppbuild"
+
+
+def request_file_api(build, *kinds):
+    """Ask the next CMake configure of build to describe kinds (e.g. "codemodel-v2")."""
+    query = Path(build) / ".cmake/api/v1/query" / FILE_API_CLIENT
+    query.mkdir(parents=True, exist_ok=True)
+    for kind in kinds:
+        (query / kind).touch()
+
+
+def file_api_reply(build, kind):
+    """(reply directory, object) of the newest reply to kind, or None when CMake gave none."""
+    reply = Path(build) / ".cmake/api/v1/reply"
+    indexes = sorted(reply.glob("index-*.json"))
+    if not indexes:
+        return None
+    index = storage.read_json(indexes[-1])
+    reference = index.get("reply", {}).get(FILE_API_CLIENT, {}).get(kind, {}).get("jsonFile")
+    if reference is None:
+        return None
+    return reply, storage.read_json(storage.contained(reply, reference))
+
+
 def compiler(build):
-    """Read the compiler CMake detected for a configured tree, if any."""
+    """The C++ compiler of a configured tree, if any.
+
+    Kind, version and path come from the File API (toolchains-v1). It has no target
+    architecture, so that alone is still read from CMake's compiler record.
+    """
+    toolchain = None
+    found = file_api_reply(build, "toolchains-v1")
+    if found is not None:
+        toolchain = next((t["compiler"] for t in found[1].get("toolchains", []) if t.get("language") == "CXX"), None)
+    architecture = _recorded_architecture(build)
+    if toolchain is None and architecture is None:
+        return None
+    toolchain = toolchain or {}
+    return CompilerInfo(toolchain.get("id"), toolchain.get("version"), toolchain.get("path"), architecture)
+
+
+def _recorded_architecture(build):
     files = sorted((Path(build) / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake"), key=lambda p: p.stat().st_mtime_ns)
     if not files:
         return None
@@ -289,8 +331,7 @@ def compiler(build):
         return match.group(1) if match else None
     system = files[-1].parent / "CMakeSystem.cmake"
     processor = value("CMAKE_SYSTEM_PROCESSOR", system.read_text(encoding="utf-8", errors="replace")) if system.is_file() else None
-    return CompilerInfo(value("CMAKE_CXX_COMPILER_ID"), value("CMAKE_CXX_COMPILER_VERSION"), value("CMAKE_CXX_COMPILER"),
-                        _architecture(value("CMAKE_CXX_COMPILER_ARCHITECTURE_ID") or processor, value("CMAKE_CXX_SIZEOF_DATA_PTR")))
+    return _architecture(value("CMAKE_CXX_COMPILER_ARCHITECTURE_ID") or processor, value("CMAKE_CXX_SIZEOF_DATA_PTR"))
 
 
 def _architecture(name, pointer):

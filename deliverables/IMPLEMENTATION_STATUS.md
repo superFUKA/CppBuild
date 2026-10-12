@@ -1,5 +1,11 @@
 # 実装・検証記録
 
+## 2026-10-12 コンパイラ情報をFile APIから読む（案(b)）
+
+- 変更：`generators.compiler()` は、コンパイラの種類・版・パスをFile APIの `toolchains-v1`（CXX）から読む。アーキテクチャはFile APIにないため、従来どおりCMakeの記録（`CMakeCXXCompiler.cmake` の `CMAKE_CXX_COMPILER_ARCHITECTURE_ID`・`CMAKE_CXX_SIZEOF_DATA_PTR`、`CMakeSystem.cmake` の `CMAKE_SYSTEM_PROCESSOR`）から読む（`_recorded_architecture`）。File APIの回答がなければ種類・版・パスは `None` で、アーキテクチャの照合だけ行う。経緯と選択肢は[設計整理メモ](DESIGN_NOTES.md)冒頭。
+- 共通化：問い合わせの作成（`generators.request_file_api`）と回答の読み取り（`generators.file_api_reply`）を、`engine.codemodel` と共通にした。構成時に `codemodel-v2` と `toolchains-v1` を問い合わせる。環境診断（`Environment.check`）の試験構成も `toolchains-v1` を問い合わせる。公開の `CompilerInfo` は変えていない。
+- 試験：`tests/test_generators.py` の単体試験を、回答がないときはアーキテクチャだけ、回答があれば内部ファイルと異なる値でもFile APIの値になることの確認に変更。`tests/test_generators_real.py` に、3生成器で種類・版・実在するパスが得られることと、環境診断がコンパイラのパス・版を返すことの確認を追加。`toolchains-v1` の問い合わせを外すと実試験が失敗することを確認した。全220件成功（3生成器の実ビルド、skipなし、490.3秒）。利用シナリオは未実行。未コミット。
+
 ## 2026-10-12 Visual Studioのデバッグ時の作業ディレクトリ
 
 - 問題（コードと生成物で確認）：CppBuildの `run` はProjectのディレクトリでプログラムを起動し（`engine.run_command`）、テストの探索も `WORKING_DIRECTORY` にProjectのディレクトリを使うが、生成したvcxprojには `LocalDebuggerWorkingDirectory` がなく、F5ではVSの既定（`$(ProjectDir)`、ビルドツリー側）で起動していた。相対パスでファイルを読むプログラムは、CppBuildでは動きF5では動かない。

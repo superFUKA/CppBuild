@@ -1,4 +1,5 @@
 """Generator/compiler selection without running CMake."""
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -107,8 +108,18 @@ class GeneratorSettingsTests(unittest.TestCase):
             'set(CMAKE_CXX_COMPILER_VERSION "13.2.0")\nset(CMAKE_CXX_COMPILER_ARCHITECTURE_ID "")\n'
             'set(CMAKE_CXX_SIZEOF_DATA_PTR "8")\n')
         (files / "CMakeSystem.cmake").write_text('set(CMAKE_SYSTEM_PROCESSOR "aarch64")\n')
+        # Without a File API reply only the architecture is known.
+        self.assertEqual(generators.compiler(build), generators.CompilerInfo(None, None, None, "ARM64"))
+        # Kind, version and path come from the File API, not from CMake's internal record.
+        reply = build / ".cmake/api/v1/reply"
+        reply.mkdir(parents=True)
+        (reply / "toolchains-v1-1.json").write_text(json.dumps({"kind": "toolchains", "toolchains": [
+            {"language": "C", "compiler": {"id": "Clang", "version": "18.1.0", "path": "/usr/bin/clang"}},
+            {"language": "CXX", "compiler": {"id": "GNU", "version": "13.3.0", "path": "/opt/g++"}}]}))
+        (reply / "index-2026-10-12T00-00-00-0000.json").write_text(json.dumps(
+            {"reply": {"client-cppbuild": {"toolchains-v1": {"jsonFile": "toolchains-v1-1.json"}}}}))
         info = generators.compiler(build)
-        self.assertEqual((info.id, info.version, info.architecture), ("GNU", "13.2.0", "ARM64"))
+        self.assertEqual(info, generators.CompilerInfo("GNU", "13.3.0", "/opt/g++", "ARM64"))
         toolchain = generators.Toolchain("Ninja Multi-Config", "x64")
         self.assertIn("targets ARM64", generators.verify(toolchain, info))
         self.assertIsNone(generators.verify(generators.Toolchain("Ninja Multi-Config", None), info))

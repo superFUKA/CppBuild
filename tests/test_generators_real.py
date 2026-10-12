@@ -66,11 +66,17 @@ class GeneratorScenario:
         self.assertEqual(toolchain.generator, self.generator)
         environment = Environment.check(EnvironmentOptions(cmake=self.cmake))
         self.assertTrue(environment.success, "\n".join(i.detail for i in environment.items))
+        probe = environment.items[-1]  # the compiler found by configuring a small project
+        self.assertTrue(probe.version and Path(probe.path).is_file(), probe)
 
         updated = self.assertSuccess(shared.update())
         self.assertEqual(updated.generator, self.generator)
         self.assertIsNotNone(updated.compiler)
         self.assertEqual(updated.compiler.architecture, toolchain.architecture or generators.host_architecture())
+        # Read from the File API (toolchains-v1); the architecture alone from CMake's record.
+        self.assertTrue(updated.compiler.id and updated.compiler.version)
+        self.assertTrue(Path(updated.compiler.path).is_file(), updated.compiler.path)
+        self.assertIsNotNone(generators.file_api_reply(updated.build_directory, "toolchains-v1"))
         if toolchain.visual_studio:
             self.assertTrue(updated.solution_file.is_file())
             self.assertEqual(updated.solution_file.suffix, toolchain.solution_suffix)

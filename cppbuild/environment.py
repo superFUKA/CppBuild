@@ -113,6 +113,7 @@ def _probe(settings, toolchain, options, label):
             f'set_target_properties(probe PROPERTIES CXX_STANDARD {options.cpp_standard} CXX_STANDARD_REQUIRED YES)\n', encoding="utf-8")
         (root / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
         try:
+            generators.request_file_api(root / "build", "toolchains-v1")
             configure = tooling.process(settings, toolchain.configure(root, root / "build"), root)
             results = [configure]
             info = None
