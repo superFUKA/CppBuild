@@ -121,10 +121,9 @@ class GeneratedTests(unittest.TestCase):
         plan = workspace.plan(a)
         plan.write()
         before = {p: p.read_bytes() for p in plan.documents()}
-        app = a.get_project("App")
-        app.add_file("src/more.cpp", content="int more() { return 0; }\n", auto_update=False)
-        part = b.get_project("Part")
-        part.add_file("src/extra.cpp", content="int extra() { return 0; }\n", auto_update=False)
+        # Settings change generated files; added sources do not (CMake collects them).
+        for project in (b.get_project("Part"), util):
+            project.settings.set_windows_export_all_symbols()
         plan = workspace.plan(a)
         original = storage.atomic_write
         calls = []

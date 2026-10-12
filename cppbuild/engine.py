@@ -105,7 +105,8 @@ def _decode_line(line, fallback):
 
 def _scan(project):
     files = set()
-    excluded = {".cppbuild", ".git", "build", "__pycache__", ".cache", ".venv"}
+    # The generated CMake collects the same files again (cmake_files._collect_function).
+    excluded = set(cmake_files.SCAN_EXCLUDED)
     for directory in project.settings._data.source_directories:
         root = storage.contained(project.root, directory)
         if any(output_paths.generated_directory(p) for p in (root, *root.parents)):

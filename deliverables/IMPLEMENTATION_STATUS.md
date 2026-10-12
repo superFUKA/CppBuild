@@ -1,10 +1,18 @@
 # 実装・検証記録
 
+## 2026-10-12 ソースファイルをCMake側で集める（ファイル一覧を生成ファイルに書かない）
+
+- 要望：ファイルの追加・削除のたびに、各Projectの生成 `CMakeLists.txt` が書き換わる。フィルタはディレクトリ構成のままなので、一覧を書かずに済ませたい。CMake公式がGLOBを勧めない理由を説明した上で、ユーザーが案A（`CONFIGURE_DEPENDS` で集める）を選んだ。
+- 原因：Pythonの走査結果（`engine._scan`）を `set(_cppbuild_sources …)` として1ファイルずつ書き、コンパイルしないファイルの `HEADER_FILE_ONLY` も列挙していた。フィルタは以前から `source_group(TREE)` で自動。
+- 実装：Solutionの `CMakeLists.txt` が関数 `_cppbuild_collect_sources` を定義し（各Solutionが自分のProjectの前に定義する）、Projectの `CMakeLists.txt` は `_cppbuild_collect_sources(_cppbuild_sources "src" "include")` と `source_directories` だけを書く。関数はディレクトリごとに `file(GLOB … CONFIGURE_DEPENDS LIST_DIRECTORIES true)` してPythonの走査と同じ規則でたどる。`GLOB_RECURSE` にしなかったのは、除外するディレクトリ（`.git`・`build`・出力先など）にも入ってしまい、ProjectがSolutionのルートにある配置では毎回のビルドで `.cppbuild/output` 全体を走査するため。ディレクトリ単位のglobなので、ディレクトリの追加は親のglobの変化で気づく。除外の名前は `cmake_files.SCAN_EXCLUDED` を走査と共有する。globの特殊文字を含むディレクトリ名（実測で `[old]` の中が空になった）は `[[]`・`[*]`・`[?]` に置き換えて扱う。ジャンクションはCMakeの `IS_SYMLINK` が真になることを実測した。`;` を含むファイル名は従来どおり生成前にエラー（`cmake_files.check_sources`）。INTERFACE_LIBRARYの表示用 `target_sources` と `source_group` は `if(_cppbuild_sources)` で判定する。Python側の走査は、ソースがないときの診断・`UpdateReport.files`・状態の判定に引き続き使う。`CPPBUILD_FORMAT` は上げていない（一覧の扱いはProjectの生成ファイルとそのSolutionの入口の間で閉じており、旧版で生成したリンク先はそのまま動く）。
+- 実測（追加の時間）：何も変わっていないビルド1回の中央値。201ファイル・12ディレクトリで、Ninja 0.023→0.041秒、VS2022 0.534→0.595秒。2,001ファイル・102ディレクトリで、Ninja 0.023→0.048秒、VS2022 0.515→0.595秒。
+- 試験：`tests/test_source_collection.py`。単体2件（ファイルの追加・削除で生成ファイルが変わらないこと、`source_directories` の反映、`;` を含む名前のエラー）と、3生成器の実試験3件（`[old]`・大文字の `.CPP`・除外する名前のディレクトリ・出力先のマーカー・ジャンクション・生成済みと手書きの `CMakeLists.txt` を置き、File APIのソース一覧がPythonの走査と一致すること、CppBuildなしの `cmake --build` が追加と削除に気づくこと、その間に生成ファイルが変わらないこと）。`[` の置き換えを外すと実試験が失敗することを確認した。`tests/test_linked_outputs.py` の書き込み途中失敗の試験は、ファイル追加で生成ファイルが変わる前提だったため、設定変更（`set_windows_export_all_symbols`）で2ファイルを変える形に直した。全219件成功（3生成器の実ビルド、skipなし、446.6秒）。利用シナリオは未実行。未コミット。
+
 ## 2026-10-12 Visual Studioの起動対象（VS_STARTUP_PROJECT）
 
 - 現象（報告）：実行ファイルのProjectを持つSolutionをVS2022で開いてF5を押すと、ALL_BUILD が起動対象になり「プログラムを開始できません」になる。生成するCMakeに `VS_STARTUP_PROJECT` がなく、.slnの先頭のProjectが選ばれていた。
 - 実装：`cmake_files.solution_entry()` が、所属Projectの `add_subdirectory` の後、Solutionを丸ごと構成するとき（`CPPBUILD_WHOLE_SOLUTION`）だけ、候補のうち存在する最初のターゲットをそのディレクトリの `VS_STARTUP_PROJECT` に設定する。候補（`startup_candidates()`）は、`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（それぞれProject名順）。生成内容は保存した管理設定だけで決まるようにするため、非保存の `run_projects` は使わない。`if(TARGET)` で選ぶので、`BUILD_TESTING=OFF` でTESTが構成されなければ次の候補になる。リンク先として取り込まれたSolutionは設定しない（存在しないターゲットを指すとCMakeが警告するため）。CppBuildを使わない親に `add_subdirectory` された場合も、そのSolution自身の .sln にだけ効く。`CPPBUILD_FORMAT` は上げていない。
-- 試験：`tests/test_startup_project.py` に、候補の順・ライブラリの `main_project` を飛ばすこと・リンク先のプログラムを候補にしないことの単体試験2件と、実VS2022（.slnの先頭）・実VS2026（.slnxの `DefaultStartup`）で `main_project` のTESTが起動対象になり、素のcmakeで `BUILD_TESTING=OFF` にすると実行ファイルへ移ることの実試験2件。全214件成功（3生成器の実ビルド、skipなし、407.9秒）。利用シナリオは未実行。VS上でF5を押す操作そのものは試していない（生成された .sln／.slnx の内容で確認）。未コミット。
+- 試験：`tests/test_startup_project.py` に、候補の順・ライブラリの `main_project` を飛ばすこと・リンク先のプログラムを候補にしないことの単体試験2件と、実VS2022（.slnの先頭）・実VS2026（.slnxの `DefaultStartup`）で `main_project` のTESTが起動対象になり、素のcmakeで `BUILD_TESTING=OFF` にすると実行ファイルへ移ることの実試験2件。全214件成功（3生成器の実ビルド、skipなし、407.9秒）。利用シナリオは未実行。VS上でF5を押す操作そのものは試していない（生成された .sln／.slnx の内容で確認）。`0b07c45` でコミット済み。
 
 ## 2026-10-11 CppBuildが取り込むターゲットのフォルダー（External）
 

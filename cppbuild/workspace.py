@@ -144,8 +144,8 @@ class Plan:
         result.setdefault(self.solution.root / cmake_files.ENTRY, cmake_files.solution_entry(self.solution))
         result.setdefault(self.solution.root / cmake_files.TOP_LEVEL, cmake_files.top_level(self))
         for project in self.projects.values():
-            result.setdefault(project.root / cmake_files.ENTRY, cmake_files.project_entry(
-                project, self.files[project.settings._data.guid], self.projects))
+            cmake_files.check_sources(project, self.files[project.settings._data.guid])
+            result.setdefault(project.root / cmake_files.ENTRY, cmake_files.project_entry(project, self.projects))
         for other in self.external_solutions():
             result.setdefault(other.root / cmake_files.ENTRY, cmake_files.solution_entry(other))
         for other in self.external_solutions():

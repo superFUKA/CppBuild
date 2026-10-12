@@ -2,7 +2,8 @@
 
 ## 最新の追加（2026-10-12）
 
-- **Visual Studioの起動対象（未コミット）**：生成するSolutionの `CMakeLists.txt` が `VS_STARTUP_PROJECT` を設定する。`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（Project名順）のうち構成された最初。F5でALL_BUILDが起動され「プログラムを開始できません」になる不具合の修正。全214件成功（3生成器の実ビルド、skipなし）。利用シナリオ・VS上のF5操作は未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+- **ソースファイルをCMake側で集める（未コミット）**：生成するProjectの `CMakeLists.txt` にはファイル一覧を書かず、`source_directories` だけを書く。CMakeが `file(GLOB … CONFIGURE_DEPENDS)` でCppBuildの走査と同じ規則で集めるので、ファイルの追加・削除では生成ファイルが変わらず、CppBuildなしのビルドも追加・削除に気づく。何も変わっていないビルドが実測で0.02〜0.08秒遅くなる。全219件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。判断は[設計整理メモ](deliverables/DESIGN_NOTES.md)冒頭、詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+- **Visual Studioの起動対象（`0b07c45` でコミット済み）**：生成するSolutionの `CMakeLists.txt` が `VS_STARTUP_PROJECT` を設定する。`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（Project名順）のうち構成された最初。F5でALL_BUILDが起動され「プログラムを開始できません」になる不具合の修正。全214件成功（3生成器の実ビルド、skipなし）。利用シナリオ・VS上のF5操作は未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
 
 ## 最新の追加（2026-10-11）
 
