@@ -1,5 +1,17 @@
 # 実装・検証記録
 
+## 2026-10-13 Visual Studioのプロパティに相当する設定と既存の問題の修正
+
+- 依頼：VS2022のプロパティでよく使う設定のうちCppBuildから設定できないものを、CppBuildが意図して制限している箇所を除いて実装し、既存の問題も直す。意図した制限として除いたもの：出力ファイル名（Project名で固定、衝突検査のため）、F5の実行引数・環境変数（実行引数は保存しないビルド設定のため）。
+- 追加：`BuildOption`・`BuildEvents` と `ProjectSettingsData` の `compile_options`・`link_options`・`conditional_definitions`・`warning_level`・`warnings_as_errors`・`build_events`・`output_files`（既定値のときは書かない。`output_files` は他のパスと同じく設定ファイル基準の相対パスで保存し、移設・テンプレートで付け替える）、`SolutionSettingsData.msvc_runtime`（テンプレートで引き継ぐ）、`CMakeSettings.windows_sdk`（指定したときだけツリーの識別に入れ、既存のツリー名は変えない）。`.c`・`.def`・C++20モジュールのビルド。生成：条件は生成式（`COMPILE_LANG_AND_ID`・`LINK_LANG_AND_ID`・`CXX_COMPILER_ID`・`CONFIG`）、値の `>`・`,` は `$<ANGLE-R>`・`$<COMMA>`。PCHは `$<COMPILE_LANGUAGE:CXX>` で囲みCのソースに使わない。出力へのコピーは `<ターゲット>_files` のカスタムターゲット（`workspace._names` の衝突検査に追加）。モジュールは `CXX_MODULES` ファイルセットと、モジュールを持つ・リンクするターゲットだけの `CXX_SCAN_FOR_MODULES`（Solutionの入口の最後に関数 `_cppbuild_module_scanning` でリンクをたどる）。
+- 途中で方針を変えた点：モジュールのため最初は `CMP0155` をNEWにしたが、モジュールを使わないProjectでも全ソースのスキャンと集計が走り、Ninjaで「何もしないビルド」が崩れた（`test_incremental_ascii_path` が失敗）ため、必要なターゲットだけに付ける方式に変えた。静的ランタイムのとき `gtest_force_shared_crt` をOFFにする処理は、なくても `CMAKE_MSVC_RUNTIME_LIBRARY` がGoogleTestに効く（外しても試験が通り、食い違えば `LNK2038` になるはず）ため削除した。
+- 既存の問題の修正（いずれも実測で確認）：
+  - **CMakeのクラッシュ**：C言語を有効にした新しいツリーの構成で、作業ディレクトリに非ASCII文字があると、CMake 4.2.3が3生成器とも `0xC0000409` で落ちる（コンパイラの検出時だけ。再構成・ビルドでは起きない）。CppBuildは作業ディレクトリをSolutionのディレクトリにしていたため、日本語のパスで失敗した。今回のC対応で顕在化したが、Cを使う外部のCMakeソースでも起こりえた。構成の作業ディレクトリをドライブのルートにした（`generators.configure_directory`、環境診断も同じ）。
+  - **MSVCの警告レベル**：生成ファイルは `cmake_minimum_required(VERSION 3.24)` のため `CMP0092` がNEWで、CMakeが `/W3` を付けず、MSVCは `/W1` だった（vcxprojに `WarningLevel` がなく、レベル3の `C4101` が出ないことを確認）。警告レベルを指定しないときは、MSVCでVSと同じ `/W3` を付ける。
+  - **外部のDLL**：`ImportedLibrary` の共有ライブラリを使う実行ファイルが、`run` で `0xC0000135`（DLLが見つからない）になった。`run` のPATHはProjectのDLLだけを足していた。Windowsで実行ファイル・TESTのビルド後に `$<TARGET_RUNTIME_DLLS>` を横へコピーする（F5・CppBuildなしのビルドでも効く）。
+- 試験：`tests/test_project_options.py`。単体6件（保存・既定値で書かないこと・再読み込み、不正な値、生成内容、`_files` の名前の衝突、Windows SDKの指定と既存ツリー名、テンプレート）と、VS2022・VS2026・Ninjaの実試験7件×3：構成ごとの定義と `>`・`,` を含む値、スタックサイズ（PEヘッダー）、3種のビルドイベント、出力へのコピーと再コピー、Release、警告4＋エラー化で `C4100` により失敗・警告3で成功・既定でレベル3の `C4101` が出ること、Cのソース（C++のキーワード `new` を変数名に使う）とC++のPCHの併用、`.def` だけでの書き出し、静的ランタイム（Debug・Release、`/ENTRY`、GoogleTest、`vcruntime140` を取り込まないこと）、Windows SDKの選択（VSはvcxproj、Ninjaは `INCLUDE`）、モジュールの `import` とスキャンの付く範囲、外部のDLLでの起動。`.def` をビルド対象から外すと実試験が `LNK1104` で失敗することを確認した。既存の `tests/test_output_paths.py` の部分文字列の検査（`custom`）が `add_custom_command` に当たるため、`custom/bin` に絞った。既存の試験2件の生成内容の文字列を更新。
+- 検証：全258件成功（3生成器の実ビルド、skipなし、814.1秒）。利用シナリオ7件が3生成器で全PASS（`.test-work/usage-20261013-010558-122822`、`-010852-021587`、`-011124-146465`）。VS上のF5操作、Linux/macOSは未実施。
+
 ## 2026-10-12 C++プログラムの基本設定（UTF-8、入口の関数、OSのライブラリ、リソース、gMock）
 
 - 依頼：C++開発で設定が必要な項目を洗い出し、入口の関数名を設定可能にし、「ないと明らかに困るもの」を追加する。入口の関数名は、ユーザーの選択で任意の名前を `/ENTRY` で直接入口にする方式（CRT未初期化を了承）。見送り：警告レベル、`/MP`、MSVCランタイムの切り替え、Cのソース、C++20モジュール、任意のオプション、F5の実行引数・環境変数。

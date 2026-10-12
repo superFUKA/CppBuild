@@ -276,12 +276,16 @@ def _names(project):
     Library types can be switched without CppBuild (<Solution>_<Project>_TYPE), so
     every type the Project supports counts, not only the ones this operation needs.
     """
-    initial = project.settings._data.initial_type
+    data = project.settings._data
+    initial = data.initial_type
+    kinds = [initial] if initial in {ProjectType.EXECUTABLE, ProjectType.TEST} else         [k for k in cmake_files.LIBRARY_ORDER if k in data.types]
+    targets = [cmake_files.target_name(project, k) for k in kinds]
+    if data.output_files:
+        # The target copying output_files beside the built file.
+        targets += [cmake_files.target_name(project, k) + "_files" for k in kinds if k in cmake_files.OUTPUT_FILE_KINDS]
     if initial in {ProjectType.EXECUTABLE, ProjectType.TEST}:
-        return [cmake_files.base_name(project)], []
-    kinds = [k for k in cmake_files.LIBRARY_ORDER if k in project.settings._data.types]
-    return ([cmake_files.target_name(project, k) for k in kinds],
-            [cmake_files.alias_name(project)] + [cmake_files.link_name(project, k) for k in kinds])
+        return targets, []
+    return targets, [cmake_files.alias_name(project)] + [cmake_files.link_name(project, k) for k in kinds]
 
 
 # Targets that CMake's generators or GoogleTest define in every tree with tests.

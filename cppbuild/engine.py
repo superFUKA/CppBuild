@@ -162,7 +162,7 @@ def configure(plan, settings):
     cache = build / CACHE
     storage.atomic_write(cache, plan.cache_script(toolchain).encode("utf-8"))
     generators.request_file_api(build, "codemodel-v2", "toolchains-v1")
-    result = tooling.process(settings, [*toolchain.configure(solution.root, build), "-C", cache], solution.root)
+    result = tooling.process(settings, [*toolchain.configure(solution.root, build), "-C", cache], generators.configure_directory(build))
     compiler = None
     if result.success:
         compiler = generators.compiler(build)

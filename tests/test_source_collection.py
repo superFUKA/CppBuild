@@ -24,9 +24,9 @@ class GeneratedFileTests(unittest.TestCase):
     def test_adding_and_removing_files_changes_no_generated_file(self):
         before = self.documents()
         entry = before[self.app.root / "CMakeLists.txt"]
-        self.assertIn('_cppbuild_collect_sources(_cppbuild_sources "src" "include")', entry)
+        self.assertIn('_cppbuild_collect_sources(_cppbuild_sources _cppbuild_modules "src" "include")', entry)
         self.assertNotIn("main.cpp", "".join(before.values()))
-        self.assertIn("function(_cppbuild_collect_sources result)", before[self.solution.root / "CMakeLists.txt"])
+        self.assertIn("function(_cppbuild_collect_sources result modules)", before[self.solution.root / "CMakeLists.txt"])
         self.app.add_file("src/more.cpp", content="int more() { return 1; }\n", auto_update=False)
         self.app.add_file("include/more.hpp", content="#pragma once\n", auto_update=False)
         self.assertEqual(self.documents(), before)
@@ -35,7 +35,7 @@ class GeneratedFileTests(unittest.TestCase):
         values = self.app.settings.get()
         values.source_directories = ["code", "src"]
         self.app.settings.save(values)
-        self.assertIn('_cppbuild_collect_sources(_cppbuild_sources "code" "src")',
+        self.assertIn('_cppbuild_collect_sources(_cppbuild_sources _cppbuild_modules "code" "src")',
                       self.documents()[self.app.root / "CMakeLists.txt"])
 
     def test_names_a_cmake_list_cannot_hold_are_rejected(self):

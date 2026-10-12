@@ -22,9 +22,12 @@ TOP_LEVEL = "CppBuildTopLevel.cmake"
 CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 GOOGLETEST_URL = "https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip"
 GOOGLETEST_SHA256 = "1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4"
-COMPILED_SUFFIXES = {".cpp", ".cc", ".cxx"}
-# Built on Windows too: resource scripts (icons, version information) and manifests.
-WINDOWS_COMPILED_SUFFIXES = {".rc", ".manifest"}
+COMPILED_SUFFIXES = {".cpp", ".cc", ".cxx", ".c"}
+# C++20 module interface units, built through a CXX_MODULES file set.
+MODULE_SUFFIXES = {".ixx", ".cppm", ".mpp", ".ccm", ".cxxm"}
+# Built on Windows too: resource scripts (icons, version information), manifests and
+# module-definition files (DLL exports).
+WINDOWS_COMPILED_SUFFIXES = {".rc", ".manifest", ".def"}
 # Directory names the source scan never enters, here and in the generated CMake.
 SCAN_EXCLUDED = (".cppbuild", ".git", "build", "__pycache__", ".cache", ".venv")
 # The conventions between generated files (CPPBUILD_REQUEST_*, aliases, ...). A linked
@@ -85,9 +88,10 @@ def _collect_function():
         return "|".join("".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in suffix[1:])
                         for suffix in sorted(suffixes))
     compiled = pattern(COMPILED_SUFFIXES)
+    modules = pattern(MODULE_SUFFIXES)
     windows = pattern(WINDOWS_COMPILED_SUFFIXES)
     marker = output_paths.MARKER
-    return f"""function(_cppbuild_collect_sources result)
+    return f"""function(_cppbuild_collect_sources result modules)
   set(_files)
   set(_pending)
   foreach(_root IN LISTS ARGN)
@@ -130,12 +134,57 @@ def _collect_function():
   if(WIN32)
     string(APPEND _built "|{windows}")
   endif()
+  # Module interface units go to a file set instead of the plain sources.
+  set(_modules ${{_files}})
+  list(FILTER _modules INCLUDE REGEX "\\\\.({modules})$")
+  list(FILTER _files EXCLUDE REGEX "\\\\.({modules})$")
   set(_display ${{_files}})
   list(FILTER _display EXCLUDE REGEX "\\\\.(${{_built}})$")
   if(_display)
     set_source_files_properties(${{_display}} PROPERTIES HEADER_FILE_ONLY TRUE)
   endif()
   set(${{result}} ${{_files}} PARENT_SCOPE)
+  set(${{modules}} ${{_modules}} PARENT_SCOPE)
+endfunction()"""
+
+
+# C++20 module scanning costs a step per source file, so only targets that have module
+# interface units, or link to a target that has them, are scanned. Runs once every target exists.
+MODULE_SCANNING_FUNCTION = """function(_cppbuild_module_scanning)
+  get_property(_modules GLOBAL PROPERTY CPPBUILD_MODULE_TARGETS)
+  if(NOT _modules)
+    return()
+  endif()
+  get_property(_targets GLOBAL PROPERTY CPPBUILD_COMPILED_TARGETS)
+  foreach(_target IN LISTS _targets)
+    set(_pending ${_target})
+    set(_seen)
+    while(_pending)
+      list(POP_FRONT _pending _item)
+      if(NOT TARGET "${_item}")
+        continue()
+      endif()
+      get_target_property(_aliased "${_item}" ALIASED_TARGET)
+      if(_aliased)
+        set(_item "${_aliased}")
+      endif()
+      if(_item IN_LIST _seen)
+        continue()
+      endif()
+      list(APPEND _seen "${_item}")
+      if(_item IN_LIST _modules)
+        set_property(TARGET ${_target} PROPERTY CXX_SCAN_FOR_MODULES ON)
+        break()
+      endif()
+      get_target_property(_links "${_item}" LINK_LIBRARIES)
+      get_target_property(_interface "${_item}" INTERFACE_LINK_LIBRARIES)
+      foreach(_link IN LISTS _links _interface)
+        if(_link AND NOT _link MATCHES "-NOTFOUND$")
+          list(APPEND _pending "${_link}")
+        endif()
+      endforeach()
+    endwhile()
+  endforeach()
 endfunction()"""
 
 
@@ -144,6 +193,8 @@ KIND = {ProjectType.STATIC_LIBRARY: "STATIC", ProjectType.SHARED_LIBRARY: "SHARE
 SUFFIX = {ProjectType.STATIC_LIBRARY: "static", ProjectType.SHARED_LIBRARY: "shared",
           ProjectType.INTERFACE_LIBRARY: "interface"}
 LIBRARY_ORDER = (ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY, ProjectType.INTERFACE_LIBRARY)
+# Targets whose built file is run or loaded, so output_files are copied beside it.
+OUTPUT_FILE_KINDS = (ProjectType.EXECUTABLE, ProjectType.TEST, ProjectType.SHARED_LIBRARY)
 
 
 # Names -----------------------------------------------------------------------
@@ -263,7 +314,7 @@ def solution_entry(solution):
     data = solution.settings._data
     requests = internal_requests(solution)
     lines = _header(".cppbuild/project.json", f"Solution {data.name}: configure with cmake -S <this directory> -B <build directory>.")
-    lines += ["cmake_minimum_required(VERSION 3.24)", f"project({data.name} LANGUAGES CXX)",
+    lines += ["cmake_minimum_required(VERSION 3.24)", f"project({data.name} LANGUAGES C CXX)",
               f"set_property(DIRECTORY PROPERTY CPPBUILD_FORMAT {FORMAT})  # checked by the including Solution", "",
               "# Every member is added, with this Solution's linked Solutions, unless another CppBuild",
               "# Solution includes this one (CPPBUILD_LINKED) and requests only the Projects it needs.",
@@ -277,7 +328,8 @@ def solution_entry(solution):
               "endif()", "",
               "# Each Project collects its sources when CMake runs, so adding or removing a file changes",
               "# no generated file. CONFIGURE_DEPENDS checks the directories again at every build.",
-              *_collect_function().splitlines()]
+              *_collect_function().splitlines(), "",
+              *MODULE_SCANNING_FUNCTION.splitlines()]
     for project in sorted(solution.projects(), key=lambda p: p.name):
         guid = project.settings._data.guid
         variable = request_variable(guid)
@@ -298,6 +350,10 @@ def solution_entry(solution):
                 lines.append(f"    set(CMAKE_FOLDER {arg(folder)})")
             lines.append("  endif()")
         lines += [f"  add_subdirectory({arg(_relative(solution.root, project.root, 'A Project directory'))})", "endif()"]
+    lines += ["", "if(CPPBUILD_WHOLE_SOLUTION)",
+              "  # Every target of this build exists now, linked Solutions included.",
+              "  _cppbuild_module_scanning()",
+              "endif()"]
     candidates = startup_candidates(solution)
     if candidates:
         lines += ["", "# Visual Studio starts the first program that exists (a TEST only with BUILD_TESTING);",
@@ -343,6 +399,11 @@ def top_level(plan):
               "    # Executables and DLLs side by side, so programs find their DLLs.",
               '    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")',
               "  endif()"]
+    if data.msvc_runtime == "static":
+        lines += ["  if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)",
+                  "    # The static C runtime (/MT) for every target, including linked Solutions.",
+                  '    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")',
+                  "  endif()"]
     if data.solution_folders is not None:
         lines += ["  set_property(GLOBAL PROPERTY USE_FOLDERS ON)",
                   "  # ALL_BUILD, ZERO_CHECK, RUN_TESTS and the like, beside the other targets CppBuild did not write.",
@@ -491,17 +552,21 @@ def _target_body(project, kind, target, items, indent):
         definitions.append(scope + " " + " ".join(arg(d) for d in settings.public_definitions))
     if definitions:
         lines.append(f"target_compile_definitions({target} {' '.join(definitions)})")
-    lines.append(f'target_compile_options({target} {scope} "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>")')
+    lines.append(f'target_compile_options({target} {scope} "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>" '
+                 '"$<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>")')
     test = kind == ProjectType.TEST
     if items or test:
         lines.append(f"target_link_libraries({target} {scope} "
                      + " ".join((["GTest::gtest_main", "GTest::gmock"] if test else []) + items) + ")")
     if not interface:
-        headers = [arg(_relative(project.root, storage.contained(project.root, h), "A precompiled header"))
+        # C++ headers, so C sources of the same target do not use them.
+        headers = ['"$<$<COMPILE_LANGUAGE:CXX>:' + _source_path(project.root, storage.contained(project.root, h),
+                                                                  "A precompiled header")[1:-1] + '>"'
                    for h in data.project_headers]
-        headers += [arg("<" + h + ">") for h in data.system_headers]
+        headers += ['"$<$<COMPILE_LANGUAGE:CXX>:<' + h + '$<ANGLE-R>>"' for h in data.system_headers]
         if headers:
             lines.append(f"target_precompile_headers({target} PRIVATE {' '.join(headers)})")
+        lines += _options(project, kind, target)
         standard, output = standard_variable(project), output_variable(project)
         lines += [f"set_target_properties({target} PROPERTIES CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)",
                   f"if(DEFINED {standard})",
@@ -516,7 +581,101 @@ def _target_body(project, kind, target, items, indent):
 
 
 def _compiled_sources(project, files):
-    return any(p.suffix.lower() in COMPILED_SUFFIXES for p in files)
+    return any(p.suffix.lower() in COMPILED_SUFFIXES | MODULE_SUFFIXES for p in files)
+
+
+def _escape(value):
+    """Text inside a generator expression: > and , would end it."""
+    return value.replace(">", "$<ANGLE-R>").replace(",", "$<COMMA>")
+
+
+def _condition(option, language, *, link=False):
+    """The generator expression condition of a BuildOption; None when it always applies."""
+    parts = []
+    if option.compiler is not None:
+        if link:
+            parts.append(f"$<LINK_LANG_AND_ID:CXX,{option.compiler}>")
+        elif language:
+            parts.append(f"$<OR:$<COMPILE_LANG_AND_ID:C,{option.compiler}>,$<COMPILE_LANG_AND_ID:CXX,{option.compiler}>>")
+        else:
+            parts.append(f"$<CXX_COMPILER_ID:{option.compiler}>")
+    elif language:
+        parts.append("$<COMPILE_LANGUAGE:C,CXX>")
+    if option.configuration is not None:
+        parts.append(f"$<CONFIG:{option.configuration}>")
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else f"$<AND:{','.join(parts)}>"
+
+
+def _conditional(option, language, *, link=False):
+    condition = _condition(option, language, link=link)
+    value = _escape(option.value)
+    return f'"{value}"' if condition is None else f'"$<{condition}:{value}>"'
+
+
+# GNU-style flags for MSVC's /W0-/W4.
+GNU_WARNINGS = {0: "-w", 1: "-Wall", 2: "-Wall", 3: "-Wall;-Wextra", 4: "-Wall;-Wextra;-Wpedantic"}
+
+
+def _options(project, kind, target):
+    """This Project's own warnings, options and conditional definitions (never passed to consumers)."""
+    data = project.settings._data
+    lines = []
+    if data.warning_level is None:
+        # Visual Studio's default; CMake no longer adds /W3 (CMP0092), so MSVC would use /W1.
+        lines += ["if(MSVC)",
+                  f'  target_compile_options({target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:/W3>")',
+                  "endif()"]
+    else:
+        level = data.warning_level
+        lines += ["if(MSVC)",
+                  f'  target_compile_options({target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:/W{level}>")',
+                  "else()",
+                  f'  target_compile_options({target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:{GNU_WARNINGS[level]}>")',
+                  "endif()"]
+    if data.warnings_as_errors:
+        lines.append(f"set_target_properties({target} PROPERTIES COMPILE_WARNING_AS_ERROR ON)")
+    if data.conditional_definitions:
+        lines.append(f"target_compile_definitions({target} PRIVATE "
+                     + " ".join(_conditional(d, False) for d in data.conditional_definitions) + ")")
+    if data.compile_options:
+        lines.append(f"target_compile_options({target} PRIVATE "
+                     + " ".join(_conditional(o, True) for o in data.compile_options) + ")")
+    if data.link_options and kind != ProjectType.STATIC_LIBRARY:
+        lines.append(f"target_link_options({target} PRIVATE "
+                     + " ".join(_conditional(o, False, link=True) for o in data.link_options) + ")")
+    stages = (("pre_build", "PRE_BUILD"), ("pre_link", "PRE_LINK"), ("post_build", "POST_BUILD"))
+    for field, stage in stages:
+        commands = getattr(data.build_events, field)
+        if commands:
+            lines.append(f"add_custom_command(TARGET {target} {stage}")
+            lines += ["  COMMAND " + " ".join(arg(a) for a in command) for command in commands]
+            lines.append('  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" VERBATIM)')
+    if data.output_files and kind in OUTPUT_FILE_KINDS:
+        files = target + "_files"
+        items = " ".join(arg(_relative(project.root, storage.contained(project.root, f), "An output file"))
+                         for f in data.output_files)
+        lines += ["# Copied beside the built file at every build, keeping their place in the Project.",
+                  "set(_cppbuild_copy)",
+                  f"foreach(_cppbuild_item IN ITEMS {items})",
+                  '  set(_cppbuild_from "${CMAKE_CURRENT_SOURCE_DIR}/${_cppbuild_item}")',
+                  f'  set(_cppbuild_to "$<TARGET_FILE_DIR:{target}>/${{_cppbuild_item}}")',
+                  '  if(IS_DIRECTORY "${_cppbuild_from}")',
+                  "    set(_cppbuild_command copy_directory)",
+                  "    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.26)",
+                  "      set(_cppbuild_command copy_directory_if_different)",
+                  "    endif()",
+                  '    list(APPEND _cppbuild_copy COMMAND "${CMAKE_COMMAND}" -E ${_cppbuild_command} "${_cppbuild_from}" "${_cppbuild_to}")',
+                  "  else()",
+                  '    get_filename_component(_cppbuild_parent "${_cppbuild_item}" DIRECTORY)',
+                  f'    list(APPEND _cppbuild_copy COMMAND "${{CMAKE_COMMAND}}" -E make_directory "$<TARGET_FILE_DIR:{target}>/${{_cppbuild_parent}}"',
+                  '      COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_cppbuild_from}" "${_cppbuild_to}")',
+                  "  endif()",
+                  "endforeach()",
+                  f"add_custom_target({files} ${{_cppbuild_copy}} VERBATIM)",
+                  f"add_dependencies({target} {files})"]
+    return lines
 
 
 def check_sources(project, files):
@@ -528,7 +687,7 @@ def check_sources(project, files):
 def _sources(project):
     roots = [arg(_relative(project.root, storage.contained(project.root, d), "A source directory"))
              for d in project.settings._data.source_directories]
-    return [f"_cppbuild_collect_sources(_cppbuild_sources{''.join(' ' + r for r in roots)})"]
+    return [f"_cppbuild_collect_sources(_cppbuild_sources _cppbuild_modules{''.join(' ' + r for r in roots)})"]
 
 
 def _requested_types():
@@ -569,7 +728,7 @@ def _test_setup():
             "  # Our targets use CMake's default DLL runtime, which GoogleTest must match.",
             "  set(BUILD_GMOCK ON)",
             "  set(INSTALL_GTEST OFF)",
-            "  set(gtest_force_shared_crt ON)",
+            "  set(gtest_force_shared_crt ON)  # CMAKE_MSVC_RUNTIME_LIBRARY still selects the static runtime",
             '  set(_cppbuild_googletest_url "${CPPBUILD_GOOGLETEST_URL}")',
             '  if(NOT _cppbuild_googletest_url MATCHES "^[A-Za-z][A-Za-z0-9+.-]*://")',
             "    # A local ZIP may be given with backslashes; a URL must keep its //.",
@@ -589,6 +748,20 @@ def _test_setup():
             "endif()"]
 
 
+def _modules(target, scope, indent):
+    pad = " " * indent
+    lines = [f"set_property(GLOBAL APPEND PROPERTY CPPBUILD_COMPILED_TARGETS {target})",
+             "if(_cppbuild_modules)",
+             "  if(CMAKE_VERSION VERSION_LESS 3.28)",
+             f'    message(FATAL_ERROR "{target} has C++ module interface units, which need CMake 3.28 or later")',
+             "  endif()",
+             f"  target_sources({target} {scope} FILE_SET cppbuild_modules TYPE CXX_MODULES",
+             '    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${_cppbuild_modules})',
+             f"  set_property(GLOBAL APPEND PROPERTY CPPBUILD_MODULE_TARGETS {target})",
+             "endif()"]
+    return [pad + line for line in lines]
+
+
 def _entry_point(project, target):
     data = project.settings._data
     lines = []
@@ -604,7 +777,12 @@ def _entry_point(project, target):
                   "  # import libraries without the startup code, so they are linked by name (CMake's default",
                   "  # runtime: the debug one for Debug).",
                   f'  target_link_options({target} PRIVATE "/ENTRY:{data.entry_point}" "/SUBSYSTEM:{subsystem}")',
-                  f'  target_link_libraries({target} PRIVATE "$<IF:$<CONFIG:Debug>,ucrtd,ucrt>" "$<IF:$<CONFIG:Debug>,vcruntimed,vcruntime>")',
+                  '  set(_cppbuild_crt "")',
+                  '  if(CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL$")',
+                  '    set(_cppbuild_crt lib)  # the static runtime chosen by the top-level Solution',
+                  "  endif()",
+                  f'  target_link_libraries({target} PRIVATE "$<IF:$<CONFIG:Debug>,${{_cppbuild_crt}}ucrtd,${{_cppbuild_crt}}ucrt>"',
+                  '    "$<IF:$<CONFIG:Debug>,${_cppbuild_crt}vcruntimed,${_cppbuild_crt}vcruntime>")',
                   "else()",
                   f"  message(FATAL_ERROR {arg(message)})",
                   "endif()"]
@@ -652,7 +830,15 @@ def project_entry(project, providers):
                   "# Visual Studio debugs in the Project directory, where CppBuild's run and the tests start too.",
                   f'set_target_properties({target} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}")']
         lines += _target_body(project, initial, target, items, 0)
+        lines += _modules(target, "PRIVATE", 0)
         lines += _entry_point(project, target)
+        lines += ["if(WIN32)",
+                  "  # DLLs the program loads (imported libraries, libraries with their own output directory)",
+                  "  # beside it, so it starts from Visual Studio, CppBuild's run or the tests alike.",
+                  f"  add_custom_command(TARGET {target} POST_BUILD",
+                  f'    COMMAND "${{CMAKE_COMMAND}}" -E "$<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:{target}>>,copy_if_different,true>"',
+                  f'      "$<TARGET_RUNTIME_DLLS:{target}>" "$<TARGET_FILE_DIR:{target}>" COMMAND_EXPAND_LISTS VERBATIM)',
+                  "endif()"]
         lines += ["if(DISPLAY IN_LIST CPPBUILD_REQUESTED AND NOT CPPBUILD_WHOLE_SOLUTION)",
                   "  # Listed for the IDE only: shown, but not part of the default build.",
                   *_display_only(target, output_variable(project), 2),
@@ -661,8 +847,8 @@ def project_entry(project, providers):
             lines += [""] + _test_registration(project, target)
     else:
         lines += [""] + _library(project, items)
-    lines += ["", "if(_cppbuild_sources)",
-              '  source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "" FILES ${_cppbuild_sources})',
+    lines += ["", "if(_cppbuild_sources OR _cppbuild_modules)",
+              '  source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "" FILES ${_cppbuild_sources} ${_cppbuild_modules})',
               "endif()"]
     return "\n".join(lines) + "\n"
 
@@ -723,9 +909,9 @@ def _library(project, items):
         lines += ["", f"if({name} IN_LIST _cppbuild_types)"]
         if kind == ProjectType.INTERFACE_LIBRARY:
             lines += [f"  add_library({target} INTERFACE)",
-                      "  if(_cppbuild_sources)",
+                      "  if(_cppbuild_sources OR _cppbuild_modules)",
                       "    # Listed for the IDE only.",
-                      f"    target_sources({target} PRIVATE ${{_cppbuild_sources}})",
+                      f"    target_sources({target} PRIVATE ${{_cppbuild_sources}} ${{_cppbuild_modules}})",
                       "  endif()"]
         else:
             other = "SHARED" if kind == ProjectType.STATIC_LIBRARY else "STATIC"
@@ -738,6 +924,8 @@ def _library(project, items):
             if kind == ProjectType.SHARED_LIBRARY and data.windows_export_all_symbols:
                 lines.append(f"  set_target_properties({target} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)")
         lines += _target_body(project, kind, target, items, 2)
+        if kind != ProjectType.INTERFACE_LIBRARY:
+            lines += _modules(target, "PUBLIC", 2)
         lines.append("endif()")
     alias = alias_name(project)
     lines += ["",

@@ -65,7 +65,7 @@ class SettingsTests(unittest.TestCase):
     def test_generated_content(self):
         self.app.settings.link_project(self.lib, T.STATIC_LIBRARY)
         self.lib.settings.set_system_libraries(["ws2_32"])
-        option = '"$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>"'
+        option = '"$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>" "$<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>"'
         lib = self.entry(self.lib)
         # Consumers read the library's headers too, so the options are part of its usage requirements.
         self.assertIn(f"target_compile_options(Demo_Lib PUBLIC {option})", lib)

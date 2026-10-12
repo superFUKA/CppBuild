@@ -64,7 +64,7 @@ class OutputPathTests(unittest.TestCase):
         script = plan.cache_script(toolchain)
         expected = output_paths.area(self.app, "../custom/bin", toolchain.context).as_posix()
         self.assertIn(f'set(Demo_App_OUTPUT_DIRECTORY "{expected}" CACHE PATH "" FORCE)', script)
-        self.assertNotIn("custom", "".join(plan.documents().values()))
+        self.assertNotIn("custom/bin", "".join(plan.documents().values()))
 
     def test_generated_leaves_excluded_from_scan_and_templates_after_reopen(self):
         data = self.app.settings.get()

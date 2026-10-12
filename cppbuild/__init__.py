@@ -12,7 +12,7 @@ from .models import ToolSettings, SolutionFolderSettings, CMakeSettings
 from .models import (
     ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
-    TypeSettingsData, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
+    TypeSettingsData, BuildOption, BuildEvents, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
     MissingDependency, MissingDependenciesError,
     GitSource, FetchFailure, GitFetchError, GitSourceConflictError,
 )
@@ -20,7 +20,7 @@ from .git_sources import FetchReport, GitSourceStatus
 
 __all__ = [
     "SolutionFolderSettings", "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
-    "TypeSettingsData", "ProjectBuildSettings", "SolutionBuildSettings", "INHERIT",
+    "TypeSettingsData", "BuildOption", "BuildEvents", "ProjectBuildSettings", "SolutionBuildSettings", "INHERIT",
     "ChangeReport", "SettingsError", "SettingsConflictError",
     "FileOperationReport", "OperationReport", "ProcessReport", "UpdateReport",
     "Dependency", "LinkReport", "ProjectReference",

@@ -1,5 +1,9 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-13）
+
+- **VSのプロパティに相当する設定と既存の問題の修正**：任意のコンパイル／リンクオプション・条件付きの定義（`BuildOption`）、警告レベルとエラー化、ビルドイベント、出力へのコピー、MSVCランタイム（Solution）、Windows SDK（`CMakeSettings`）、`.c`・`.def`・C++20モジュールのビルド。既存の問題として、日本語のパスでCを有効にした構成時のCMakeのクラッシュ、MSVCが `/W1` だったこと、外部のDLLで起動できなかったことを修正。出力ファイル名とF5の実行引数・環境変数は意図した制限として対象外。全258件成功（3生成器の実ビルド、skipなし）、利用シナリオ7件が3生成器で全PASS。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「Visual Studioのプロパティに相当する設定」。
+
 ## 最新の追加（2026-10-12）
 
 - **C++プログラムの基本設定（未コミット）**：MSVCで `/utf-8`・`/Zc:__cplusplus` を既定に（日本語のソースがビルドできなかった不具合の修正）、入口の関数 `set_entry_point`（WinMain系はGUI、任意の名前は `/ENTRY`）、OSのライブラリ `set_system_libraries`、Windowsで `.rc`・`.manifest` をビルド、gMock。全231件成功（3生成器の実ビルド、skipなし）、利用シナリオ7件が3生成器で全PASS。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「C++プログラムの基本設定」。

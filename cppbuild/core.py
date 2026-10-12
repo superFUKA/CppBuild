@@ -8,7 +8,7 @@ import re
 import uuid
 
 from .models import (
-    ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
+    BuildEvents, BuildOption, ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
     TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference, LIBRARY_TYPES, GitSource,
 )
@@ -45,6 +45,73 @@ def _entry_point(values):
     expected = STANDARD_ENTRY_POINTS.get(entry or "main")
     if expected is not None and gui != expected:
         raise SettingsError(f"{entry or 'main'} is the entry of a {'GUI' if expected else 'console'} program")
+
+
+CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
+MSVC_RUNTIMES = ("dll", "static")
+
+
+def _cmake_text(value, what):
+    """Text the generated CMake passes as one argument; ";" or a generator expression would change it."""
+    if not isinstance(value, str) or not value or any(c in value for c in ("\x00", "\r", "\n", ";")) or "$<" in value:
+        raise SettingsError(f"{what} must be nonempty text without ';', line breaks or '$<': {value!r}")
+
+
+def _build_options(items, what, *, definitions=False):
+    if not isinstance(items, list):
+        raise SettingsError(f"{what} must be a list")
+    for item in items:
+        if not isinstance(item, BuildOption):
+            raise SettingsError(f"{what} must contain BuildOption")
+        _cmake_text(item.value, what)
+        if any(c in item.value for c in '"\\$'):
+            raise SettingsError(f"{what} cannot contain quotes, backslashes or '$': {item.value!r}")
+        if definitions and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(=.*)?", item.value):
+            raise SettingsError(f"A definition is NAME or NAME=VALUE: {item.value!r}")
+        if item.compiler is not None and (not isinstance(item.compiler, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", item.compiler)):
+            raise SettingsError(f"compiler is a CMake compiler id like MSVC, GNU or Clang: {item.compiler!r}")
+        if item.configuration is not None and item.configuration not in CONFIGURATIONS:
+            raise SettingsError(f"configuration must be one of {', '.join(CONFIGURATIONS)}: {item.configuration!r}")
+
+
+def _as_build_options(items):
+    if isinstance(items, (str, BuildOption)):
+        raise SettingsError("Pass a list of options")
+    return [BuildOption(i) if isinstance(i, str) else deepcopy(i) for i in items]
+
+
+def _build_events(events):
+    if not isinstance(events, BuildEvents):
+        raise SettingsError("Expected BuildEvents")
+    for stage in ("pre_build", "pre_link", "post_build"):
+        commands = getattr(events, stage)
+        if not isinstance(commands, list):
+            raise SettingsError(f"{stage} must be a list of commands")
+        for command in commands:
+            if not isinstance(command, list) or not command:
+                raise SettingsError(f"Each {stage} command is a nonempty list of arguments")
+            for argument in command:
+                _cmake_text(argument, "A build event argument")
+
+
+def _encode_options(items):
+    return [{k: v for k, v in (("value", i.value), ("compiler", i.compiler), ("configuration", i.configuration)) if v is not None}
+            for i in items]
+
+
+def _decode_options(items, what):
+    if not isinstance(items, list):
+        raise SettingsError(f"{what} must be a list")
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise SettingsError(f"Expected {what} objects")
+        item = dict(item)
+        item.setdefault("compiler", None)
+        item.setdefault("configuration", None)
+        storage.object_fields(item, {"value", "compiler", "configuration"})
+        result.append(BuildOption(**item))
+    return result
 
 
 def _build_settings(value, seen=None):
@@ -194,6 +261,22 @@ class ProjectSettings(_Settings):
                 raise SettingsError(f"A system library is a plain name like ws2_32 or pthread: {library!r}")
         if len(set(values.system_libraries)) != len(values.system_libraries):
             raise SettingsError("Duplicate system library")
+        _build_options(values.compile_options, "compile_options")
+        _build_options(values.link_options, "link_options")
+        _build_options(values.conditional_definitions, "conditional_definitions", definitions=True)
+        if values.warning_level is not None and (type(values.warning_level) is not int or not 0 <= values.warning_level <= 4):
+            raise SettingsError("warning_level must be 0-4 or None")
+        if type(values.warnings_as_errors) is not bool:
+            raise SettingsError("warnings_as_errors must be boolean")
+        _build_events(values.build_events)
+        _strings(values.output_files)
+        for path in values.output_files:
+            _cmake_text(path, "An output file")
+            resolved = storage.contained(self.owner.root, path)
+            if resolved == self.owner.root or resolved.is_relative_to(self.path.parent):
+                raise SettingsError(f"Output files are files or directories inside the Project: {path}")
+        if len(set(values.output_files)) != len(values.output_files):
+            raise SettingsError("Duplicate output file")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
@@ -213,6 +296,17 @@ class ProjectSettings(_Settings):
         entry_point = raw.pop("entry_point", None)
         gui = raw.pop("gui", False)
         system_libraries = raw.pop("system_libraries", [])
+        compile_options = _decode_options(raw.pop("compile_options", []), "compile_options")
+        link_options = _decode_options(raw.pop("link_options", []), "link_options")
+        conditional_definitions = _decode_options(raw.pop("conditional_definitions", []), "conditional_definitions")
+        warning_level = raw.pop("warning_level", None)
+        warnings_as_errors = raw.pop("warnings_as_errors", False)
+        events = raw.pop("build_events", {})
+        if not isinstance(events, dict):
+            raise SettingsError("build_events must be an object")
+        events = {"pre_build": [], "pre_link": [], "post_build": [], **events}
+        storage.object_fields(events, {"pre_build", "pre_link", "post_build"})
+        output_files = raw.pop("output_files", [])
         storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers", "guid", "initial_type"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
@@ -243,7 +337,9 @@ class ProjectSettings(_Settings):
         except (TypeError, ValueError) as exc:
             raise SettingsError("Unsupported initial Project type") from exc
         values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default,
-                                    export_all, entry_point, gui, system_libraries)
+                                    export_all, entry_point, gui, system_libraries, compile_options, link_options,
+                                    conditional_definitions, warning_level, warnings_as_errors, BuildEvents(**events),
+                                    output_files)
         if version < 4:
             self._complete_types(values)
         self._validate(values, legacy=version < 3)
@@ -295,6 +391,18 @@ class ProjectSettings(_Settings):
             payload["gui"] = True
         if values.system_libraries:
             payload["system_libraries"] = values.system_libraries
+        for key in ("compile_options", "link_options", "conditional_definitions"):
+            if getattr(values, key):
+                payload[key] = _encode_options(getattr(values, key))
+        if values.warning_level is not None:
+            payload["warning_level"] = values.warning_level
+        if values.warnings_as_errors:
+            payload["warnings_as_errors"] = True
+        events = {k: v for k, v in asdict(values.build_events).items() if v}
+        if events:
+            payload["build_events"] = events
+        if values.output_files:
+            payload["output_files"] = values.output_files
         documents[self.path] = storage.document(self.path, "project", payload, version=version)
         return documents
 
@@ -352,12 +460,18 @@ class ProjectSettings(_Settings):
 
         revision: branch, tag or commit; None is the default branch. The commit ID is recorded.
         solution_path: the Solution's .cppbuild relative to the repository root (default ".cppbuild").
+        The places this call cloned are removed again when the link fails.
         """
         self.owner._check_active()
-        from .git_sources import prepare_link
+        from .git_sources import discard, prepare_link
         from .references import link
-        name, record, config = prepare_link(self.owner.solution, url, revision, solution_path)
-        return link(self, config, link_type, git_source=(name, record))
+        created = []
+        try:
+            name, record, config = prepare_link(self.owner.solution, url, revision, solution_path, created)
+            return link(self, config, link_type, git_source=(name, record))
+        except BaseException:
+            discard(created)
+            raise
 
     def link_package(self, package):
         from .models import CMakePackage
@@ -411,6 +525,45 @@ class ProjectSettings(_Settings):
         values.system_libraries = list(libraries)
         return self.save(values)
 
+    def set_compile_options(self, options=()):
+        """Compiler options of this Project (strings or BuildOption, one argument each)."""
+        values = self.get()
+        values.compile_options = _as_build_options(options)
+        return self.save(values)
+
+    def set_link_options(self, options=()):
+        """Linker options of this Project's program or shared library (strings or BuildOption)."""
+        values = self.get()
+        values.link_options = _as_build_options(options)
+        return self.save(values)
+
+    def set_conditional_definitions(self, definitions=()):
+        """Definitions for some compilers or configurations (strings or BuildOption, NAME or NAME=VALUE)."""
+        values = self.get()
+        values.conditional_definitions = _as_build_options(definitions)
+        return self.save(values)
+
+    def set_warnings(self, level=None, *, as_errors=False):
+        """Warning level 0-4 (None: /W3 with MSVC as in Visual Studio, else the compiler's default) and whether warnings stop the build."""
+        values = self.get()
+        values.warning_level, values.warnings_as_errors = level, as_errors
+        return self.save(values)
+
+    def set_build_events(self, *, pre_build=(), pre_link=(), post_build=()):
+        """Commands (argument lists) run before compiling, before linking and after building."""
+        values = self.get()
+        values.build_events = BuildEvents([list(c) for c in pre_build], [list(c) for c in pre_link],
+                                          [list(c) for c in post_build])
+        return self.save(values)
+
+    def set_output_files(self, paths=()):
+        """Files and directories of the Project copied beside the built file at every build."""
+        if isinstance(paths, str):
+            raise SettingsError("Pass a list of paths")
+        values = self.get()
+        values.output_files = [str(p) for p in paths]
+        return self.save(values)
+
 
 class SolutionSettings(_Settings):
     def __init__(self, owner):
@@ -451,6 +604,8 @@ class SolutionSettings(_Settings):
             seen.add(path)
         from .git_sources import validate as validate_git_sources
         validate_git_sources(values)
+        if values.msvc_runtime not in MSVC_RUNTIMES:
+            raise SettingsError(f"msvc_runtime must be one of {', '.join(MSVC_RUNTIMES)}")
         if not isinstance(values.file_templates, dict):
             raise SettingsError("file_templates must be a mapping")
         from .templates import material_path
@@ -467,8 +622,9 @@ class SolutionSettings(_Settings):
         raw.setdefault("references", {})
         raw.setdefault("dependency_directories", [])
         raw.setdefault("git_sources", {})
+        raw.setdefault("msvc_runtime", "dll")
         storage.object_fields(raw, {"name", "projects", "main_project", "file_templates", "solution_folders", "references",
-                                    "dependency_directories", "git_sources"})
+                                    "dependency_directories", "git_sources", "msvc_runtime"})
         if not isinstance(raw["git_sources"], dict):
             raise SettingsError("git_sources must be a mapping")
         for name, source in raw["git_sources"].items():
@@ -539,6 +695,8 @@ class SolutionSettings(_Settings):
             del data["dependency_directories"]
         if not data["git_sources"]:
             del data["git_sources"]
+        if data["msvc_runtime"] == "dll":
+            del data["msvc_runtime"]
         if data["solution_folders"] is not None and data["solution_folders"]["external"] == "External":
             del data["solution_folders"]["external"]
         return storage.document(self.path, "solution", data)
@@ -555,6 +713,12 @@ class SolutionSettings(_Settings):
 
     def file_templates(self):
         return self.get().file_templates
+
+    def set_msvc_runtime(self, runtime):
+        """The MSVC C runtime of the whole build with this Solution at the top: "dll" (/MD) or "static" (/MT)."""
+        values = self.get()
+        values.msvc_runtime = runtime
+        return self.save(values)
 
     def remove_file_template(self, name):
         values = self.get()

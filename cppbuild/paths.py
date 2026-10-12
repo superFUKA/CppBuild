@@ -20,6 +20,7 @@ def relative(base, target):
 def project_values(values, convert):
     values.source_directories = [convert(p) for p in values.source_directories]
     values.project_headers = [convert(p) for p in values.project_headers]
+    values.output_files = [convert(p) for p in values.output_files]
     for kind in values.types.values():
         kind.include_directories = [convert(p) for p in kind.include_directories]
     for dependency in values.dependencies.values():
@@ -76,6 +77,7 @@ def transform(kind, payload, convert):
     elif kind == "project":
         _list(data, "source_directories", convert)
         _list(data, "project_headers", convert)
+        _list(data, "output_files", convert)
         dependencies = data.get("dependencies", {})
         if not isinstance(dependencies, dict):
             raise SettingsError("dependencies must be a mapping")

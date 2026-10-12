@@ -31,6 +31,26 @@ class TypeSettingsData:
 
 
 @dataclass
+class BuildOption:
+    """One compiler or linker option, or one definition, for some compilers and configurations.
+
+    compiler is a CMake compiler id (MSVC, GNU, Clang, AppleClang, ...); None is every compiler.
+    configuration is Debug, Release, RelWithDebInfo or MinSizeRel; None is every configuration.
+    """
+    value: str
+    compiler: str | None = None
+    configuration: str | None = None
+
+
+@dataclass
+class BuildEvents:
+    """Commands run around a build, each an argument list started in the Project directory."""
+    pre_build: list[list[str]] = field(default_factory=list)
+    pre_link: list[list[str]] = field(default_factory=list)
+    post_build: list[list[str]] = field(default_factory=list)
+
+
+@dataclass
 class Dependency:
     project_guid: str
     project_type: ProjectType
@@ -98,6 +118,18 @@ class ProjectSettingsData:
     gui: bool = False
     # Libraries of the OS or toolchain linked by name, like ws2_32 or pthread.
     system_libraries: list[str] = field(default_factory=list)
+    # Options of this Project's own compilation and linking (not passed to consumers).
+    compile_options: list[BuildOption] = field(default_factory=list)
+    link_options: list[BuildOption] = field(default_factory=list)
+    # Definitions limited to some compilers or configurations, like _CRT_SECURE_NO_WARNINGS or MY_DEBUG.
+    conditional_definitions: list[BuildOption] = field(default_factory=list)
+    # 0-4 like MSVC's /W0-/W4 (GNU-style compilers: -w, -Wall, -Wall, -Wall -Wextra, -Wall -Wextra
+    # -Wpedantic); None is Visual Studio's default /W3 with MSVC and the compiler's default otherwise.
+    warning_level: int | None = None
+    warnings_as_errors: bool = False
+    build_events: BuildEvents = field(default_factory=BuildEvents)
+    # Files and directories copied beside the built file at every build (data, settings, assets).
+    output_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -122,6 +154,8 @@ class SolutionSettingsData:
     dependency_directories: list[str] = field(default_factory=list)
     # Place name (directly under the first dependency directory) -> repository cloned there.
     git_sources: dict[str, GitSource] = field(default_factory=dict)
+    # MSVC C runtime of the whole build when this Solution is the top level: "dll" (/MD) or "static" (/MT).
+    msvc_runtime: str = "dll"
 
 
 @dataclass
@@ -144,6 +178,8 @@ class CMakeSettings:
     c_compiler: str | None = None
     cxx_compiler: str | None = None
     toolchain_file: str | None = None
+    # Windows SDK version (e.g. "10.0.22621.0") for MSVC; None lets CMake or vcvarsall choose.
+    windows_sdk: str | None = None
 
 
 @dataclass

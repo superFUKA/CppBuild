@@ -365,6 +365,42 @@ net.settings.set_system_libraries(["ws2_32"])
 - **リソースとマニフェスト**：Windowsでは、ソースディレクトリの `.rc`（アイコン・バージョン情報・文字列）と `.manifest` もビルドする（従来は表示だけ）。
 - **gMock**：TESTのProjectで `BUILD_GMOCK` を既定ONにし、`GTest::gmock` もリンクする。`#include <gmock/gmock.h>` と `MOCK_METHOD` が使える。
 
+# Visual Studioのプロパティに相当する設定（2026-10-13追加）
+
+```python
+from cppbuild import BuildOption, CMakeSettings, SolutionBuildSettings
+
+# 任意のコンパイル／リンクオプション（1要素が1引数）。compiler（CMakeのコンパイラID）と configuration で条件を付けられる
+app.settings.set_compile_options(["/MP", BuildOption("/arch:AVX2", compiler="MSVC", configuration="Release")])
+app.settings.set_link_options([BuildOption("/STACK:4194304", compiler="MSVC")])
+# 構成やコンパイラで条件を付ける定義（NAME または NAME=VALUE）
+app.settings.set_conditional_definitions([BuildOption("APP_DEBUG", configuration="Debug"),
+                                          BuildOption("_CRT_SECURE_NO_WARNINGS", compiler="MSVC")])
+# 警告レベル 0〜4 と、警告をエラーにするか
+app.settings.set_warnings(4, as_errors=True)
+# ビルドイベント（引数のリスト、Projectのディレクトリで実行）
+app.settings.set_build_events(pre_build=[["python", "tools/gen.py"]], post_build=[["cmake", "-E", "echo", "done"]])
+# 毎回のビルドで実行ファイル（またはDLL）の横へコピーするファイル・ディレクトリ
+app.settings.set_output_files(["data/config.json", "assets"])
+# Solution全体のMSVCランタイム（"dll"＝/MD が既定、"static"＝/MT）
+solution.settings.set_msvc_runtime("static")
+# Windows SDKのバージョン（保存しない生成環境の設定）
+solution.set_build_settings(SolutionBuildSettings(cmake=CMakeSettings(windows_sdk="10.0.22621.0")))
+```
+
+- **共通**：Solutionのランタイム以外は、Project単位の保存する管理設定（`ProjectSettingsData`）。既定値のときは `project.json` に書かない（schema_versionは変えない。書いたファイルは旧版のCppBuildでは読めない）。生成ファイルに書くので、CppBuildなしのビルドにも効く。どれもそのProject自身のビルドだけに効き、利用側には伝わらない。INTERFACE_LIBRARYの形式では使われない。
+- **オプション・定義**：値は1つの引数。`;`・改行・`$<`・引用符・バックスラッシュ・`$` は使えない（CMakeの引数や生成式を壊すため）。`>`・`,` は使える。`compiler` は `MSVC`・`GNU`・`Clang` などのCMakeのコンパイラID、`configuration` は `Debug`・`Release`・`RelWithDebInfo`・`MinSizeRel`。オプションはCとC++のソースにだけ渡す（`.rc` には渡さない）。リンクオプションは静的ライブラリには使われない。`/MP`・`/sdl`・`/ZI`・`/fp:fast`・`/GL` と `/LTCG`・`/fsanitize=address`・`/DELAYLOAD:x.dll`（`delayimp` を `set_system_libraries` で）・`/NODEFAULTLIB:x` などはこれで指定する。Unicode版のWin32 APIは定義 `UNICODE`・`_UNICODE`。
+- **警告**：MSVCは `/W0`〜`/W4`、GCC・Clangは 0=`-w`、1・2=`-Wall`、3=`-Wall -Wextra`、4=`-Wall -Wextra -Wpedantic`。エラー化はCMake標準の `COMPILE_WARNING_AS_ERROR`（`cmake --build` の `--compile-no-warning-as-error` で一時的に外せる）。**指定しないときは、MSVCではVisual Studioと同じ `/W3`**（2026-10-13修正：従来はCMakeが `/W3` を付けなくなったため `/W1` で、VSなら出る警告が出ていなかった）。
+- **ビルドイベント**：ビルド前（VS以外の生成器ではリンク前と同じ時点）・リンク前・ビルド後。引数は文字どおり渡す（`${...}` は展開しない）。コマンドはPATHから探す。
+- **出力へのコピー**：パスはProject内（Project自身・管理ディレクトリは不可）。Project内での相対位置を保って、ビルドした実行ファイル・DLL（実行ファイル・TEST・共有ライブラリの形式）の横へ、毎回のビルドでコピーする（ファイルは変わったときだけ、ディレクトリはCMake 3.26以降で変わったものだけ）。ソースを変えずにデータだけ変えても反映される。コピー用のターゲット `<ターゲット名>_files` を作る（名前の衝突を検査する）。
+- **MSVCランタイム**：Solutionの保存する管理設定 `msvc_runtime`。最上位として構成したときに `CMAKE_MSVC_RUNTIME_LIBRARY` を設定し、リンク先Solution・GoogleTestを含むビルド全体に効く（リンク先Solution自身の設定は使わない。食い違うとリンクできないため）。CppBuildなしでは `-DCMAKE_MSVC_RUNTIME_LIBRARY=...` で上書きできる。`/ENTRY` の入口では、ランタイムに合わせて `libucrt`・`libvcruntime` 系をリンクする（静的ランタイムはCRTの開始処理なしでは初期化されないため、CRTの関数を使えない場合がある）。
+- **Windows SDK**：保存しない `CMakeSettings.windows_sdk`。VSの生成器は `CMAKE_SYSTEM_VERSION`、Ninja＋MSVCは `vcvarsall` の引数で選ぶ。指定したときはビルドツリーが別になる（指定しないときの既存のツリーはそのまま）。MSVC以外ではエラー。
+- **Cのソース**（2026-10-13追加）：`.c` もコンパイルする（全Solutionで `project(... LANGUAGES C CXX)`）。C++のPCHはCのソースに使わない。MSVCでは `/utf-8` も付ける。従来 `.c` は表示だけだったため、ビルドしたくない `.c` をソースディレクトリに置いている場合はビルドの対象になる。
+- **`.def`**（Windows）：モジュール定義ファイルをリンクに渡す。`__declspec(dllexport)` なしで関数を書き出せる。
+- **C++20モジュール**：`.ixx`・`.cppm`・`.mpp`・`.ccm`・`.cxxm` をモジュールのインターフェースとしてビルドする（CMakeの `CXX_MODULES` ファイルセット、CMake 3.28以降が必要）。ライブラリのモジュールは利用側から `import` できる。モジュールの依存を調べるスキャンは、モジュールを持つターゲットと、それを（間接的にも）リンクするターゲットだけに付ける（全ソースのスキャンはビルドが遅くなるため）。
+- **外部のDLL**（2026-10-13修正）：Windowsでは、実行ファイル・TESTのビルド後に、読み込むDLL（CMakeの `$<TARGET_RUNTIME_DLLS>`）を実行ファイルの横へコピーする。従来は `ImportedLibrary` の共有ライブラリのDLLがどこにもなく、`run`・F5・テストで起動できなかった（`0xC0000135`）。
+- **意図して設定にしないもの**：出力ファイル名（Project名で固定し、名前の衝突を検査するため）、F5の実行引数・環境変数（実行引数は保存しないビルド設定のため）。
+
 # gitのURLによるリンクと自動取得（2026-10-03追加）
 
 リポジトリをcloneしただけの人が、CppBuild・Pythonなしで `cmake -S . -B build` だけでリンク先も含めてビルドできるようにする。リンク先は、CppBuildのSolution（生成ファイルをコミット済み）を含むgitリポジトリとする。

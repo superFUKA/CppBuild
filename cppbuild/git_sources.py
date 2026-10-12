@@ -275,8 +275,11 @@ def clone(tools, url, revision, directory, path):
             _remove(temporary)
 
 
-def fetch(solution, values=None):
-    """Clone every missing place, following each clone's own records; existing places stay unchanged."""
+def fetch(solution, values=None, created=None):
+    """Clone every missing place, following each clone's own records; existing places stay unchanged.
+
+    created, a list, receives each place cloned, even when a later one fails.
+    """
     values = solution.settings._data if values is None else values
     tools = solution._build_settings.tools
     failures, fetched = [], []
@@ -293,6 +296,8 @@ def fetch(solution, values=None):
             failures.append(FetchFailure(status.name, relative, status.url, status.revision, str(exc)))
             return status
         fetched.append(status.name)
+        if created is not None:
+            created.append(status.directory)
         return replace(status, present=True)
 
     sources = walk(solution.root, values, fetch_one)
@@ -324,8 +329,8 @@ def _recorded(values, url):
     return next((n for n, s in values.git_sources.items() if identity(s.url) == identity(url)), None)
 
 
-def _place_for(solution, values, url, path, revision, *, keep):
-    """(name, record) for url, cloning a new place if it is missing.
+def _place_for(solution, values, url, path, revision, *, keep, created=None):
+    """(name, record) for url, cloning a new place if it is missing (appended to created).
 
     revision None: keep=True keeps an existing record's commit (linking again);
     otherwise it means the latest commit of the default branch.
@@ -354,26 +359,40 @@ def _place_for(solution, values, url, path, revision, *, keep):
             if not _present(directory, path):
                 raise SettingsError(f"{directory} exists without {path}/project.json")
             return name, GitSource(url, resolve(tools, url, revision, directory), path)
-        return name, GitSource(url, clone(tools, url, revision, directory, path), path)
+        record = GitSource(url, clone(tools, url, revision, directory, path), path)
+        if created is not None:
+            created.append(directory)
+        return name, record
     except _Failure as exc:
         relative = directory.relative_to(solution.root).as_posix()
         raise GitFetchError([FetchFailure(name, relative, url, revision or "HEAD", str(exc))]) from exc
 
 
-def prepare_link(solution, url, revision, path):
-    """(name, record, .cppbuild location) for linking url; checks every git source before anything is saved."""
+def prepare_link(solution, url, revision, path, created):
+    """(name, record, .cppbuild location) for linking url; checks every git source before anything is saved.
+
+    created, a list, receives each place cloned, for discard() when the link is not saved.
+    """
     from copy import deepcopy
     solution.settings.reload()
     values = deepcopy(solution.settings._data)
-    name, record = _place_for(solution, values, url, path, revision, keep=True)
+    name, record = _place_for(solution, values, url, path, revision, keep=True, created=created)
     values.git_sources[name] = record
     validate(values)
     # Clones the linked Solution's own git sources and reports conflicts before anything is saved.
     if solution._build_settings.fetch_git:
-        fetch(solution, values)
+        fetch(solution, values, created)
     else:
         walk(solution.root, values)
     return name, record, base(solution.root, values) / name / record.path
+
+
+def discard(directories):
+    """Remove the places cloned by an operation that failed: left behind, a place would later be
+    taken for someone's own copy and never be switched to its record."""
+    for directory in reversed(directories):
+        if directory.exists():
+            _remove(directory)
 
 
 def set_source(solution, url, revision, path):

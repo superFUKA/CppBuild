@@ -83,6 +83,9 @@ def validate(value):
         raise SettingsError("Visual Studio generators select the compiler with toolset")
     if value.toolchain_file is not None and (value.c_compiler or value.cxx_compiler):
         raise SettingsError("toolchain_file and explicit compilers are mutually exclusive")
+    if value.windows_sdk is not None and (not isinstance(value.windows_sdk, str)
+                                          or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", value.windows_sdk)):
+        raise SettingsError("windows_sdk is a Windows SDK version like 10.0.22621.0")
 
 
 def _digest(data):
@@ -106,6 +109,7 @@ class Toolchain:
     c_compiler: str | None = None
     cxx_compiler: str | None = None
     toolchain_file: str | None = None
+    windows_sdk: str | None = None
     explicit_compiler: bool = field(default=False, compare=False)
     make_program: str | None = field(default=None, compare=False)
     env: dict = field(default_factory=dict, compare=False, repr=False)
@@ -119,16 +123,20 @@ class Toolchain:
         return VISUAL_STUDIO[self.generator][1] if self.visual_studio else None
 
     def identity(self):
-        return {"generator": self.generator, "architecture": self.architecture, "toolset": self.toolset,
-                "c_compiler": self.c_compiler, "cxx_compiler": self.cxx_compiler,
-                "toolchain_file": self.toolchain_file}
+        result = {"generator": self.generator, "architecture": self.architecture, "toolset": self.toolset,
+                  "c_compiler": self.c_compiler, "cxx_compiler": self.cxx_compiler,
+                  "toolchain_file": self.toolchain_file}
+        if self.windows_sdk is not None:
+            # Only when chosen, so trees created before this setting keep their names.
+            result["windows_sdk"] = self.windows_sdk
+        return result
 
     @property
     def context(self):
         if self.visual_studio:
             # The plain VS2022 name predates generator selection; existing caches stay valid.
             name = f"{VISUAL_STUDIO[self.generator][0]}-{self.architecture}"
-            if self.toolset or self.toolchain_file:
+            if self.toolset or self.toolchain_file or self.windows_sdk:
                 name += "-" + _digest(self.identity())[:8]
             return name
         return "ninja-mc-" + _digest(self.identity())[:12]
@@ -139,6 +147,8 @@ class Toolchain:
             command += ["-A", self.architecture]
             if self.toolset:
                 command += ["-T", self.toolset]
+            if self.windows_sdk:
+                command.append("-DCMAKE_SYSTEM_VERSION=" + self.windows_sdk)
         else:
             if self.make_program:
                 command.append("-DCMAKE_MAKE_PROGRAM:FILEPATH=" + Path(self.make_program).as_posix())
@@ -176,14 +186,16 @@ def _resolve(architecture, cmake, base):
         if os.name != "nt":
             raise SettingsError("Visual Studio generators require Windows")
         return Toolchain(generator, architecture or host_architecture() or "x64", cmake.toolset,
-                         toolchain_file=cmake.toolchain_file, env=dict(base))
+                         toolchain_file=cmake.toolchain_file, windows_sdk=cmake.windows_sdk, env=dict(base))
     env = dict(base)
     msvc = (os.name == "nt" and cmake.toolchain_file is None
             and all(v is None or Path(v).name.lower() in {"cl", "cl.exe"} for v in (cmake.c_compiler, cmake.cxx_compiler)))
     if msvc:
-        env, architecture = _msvc_environment(env, architecture, cmake.toolset)
+        env, architecture = _msvc_environment(env, architecture, cmake.toolset, cmake.windows_sdk)
     elif cmake.toolset:
         raise SettingsError("toolset with a non-Visual Studio generator selects an MSVC version and requires MSVC on Windows")
+    elif cmake.windows_sdk:
+        raise SettingsError("windows_sdk with a non-Visual Studio generator requires MSVC on Windows")
     if sys.platform == "darwin" and architecture is not None and architecture not in _OSX:
         raise SettingsError(f"Architecture {architecture} is not available on macOS")
     path = env.get("PATH", "")
@@ -212,7 +224,7 @@ def _resolve(architecture, cmake, base):
                                       for i in _vs_installations()) if p.is_file()), None)
     if make is None:
         raise SettingsError("Ninja not found; install ninja or add it to PATH with ToolSettings.environment")
-    return Toolchain(generator, architecture, cmake.toolset, c, cxx, cmake.toolchain_file,
+    return Toolchain(generator, architecture, cmake.toolset, c, cxx, cmake.toolchain_file, cmake.windows_sdk,
                      explicit_compiler=explicit, make_program=make, env=env)
 
 
@@ -232,7 +244,7 @@ def _vs_installations():
     return [item["installationPath"] for item in sorted(data, key=version, reverse=True) if "installationPath" in item]
 
 
-def _msvc_environment(env, architecture, toolset):
+def _msvc_environment(env, architecture, toolset, sdk=None):
     existing = env.get("VSCMD_ARG_TGT_ARCH")
     if existing:
         # A Developer Prompt environment was supplied; use it rather than a second vcvarsall.
@@ -241,6 +253,8 @@ def _msvc_environment(env, architecture, toolset):
             raise SettingsError(f"The supplied MSVC environment targets {target}, not {architecture}")
         if toolset and not env.get("VCTOOLSVERSION", "").startswith(toolset):
             raise SettingsError(f"The supplied MSVC environment is not version {toolset}")
+        if sdk and env.get("WINDOWSSDKVERSION", "").rstrip("\\") != sdk:
+            raise SettingsError(f"The supplied MSVC environment does not use Windows SDK {sdk}")
         return env, target
     host = host_architecture()
     target = architecture or host
@@ -254,16 +268,16 @@ def _msvc_environment(env, architecture, toolset):
             continue
         if toolset and not any(p.name.startswith(toolset) for p in tools.iterdir()):
             continue
-        key = (str(vcvars), argument, toolset, tuple(sorted(env.items())))
+        key = (str(vcvars), argument, toolset, sdk, tuple(sorted(env.items())))
         if key not in _vcvars:
-            _vcvars[key] = _run_vcvars(vcvars, argument, toolset, env)
+            _vcvars[key] = _run_vcvars(vcvars, argument, toolset, env, sdk)
         return dict(_vcvars[key]), target
     raise SettingsError("No Visual Studio installation with MSVC" + (f" {toolset}" if toolset else "")
                         + " was found for the Ninja generator")
 
 
-def _run_vcvars(vcvars, argument, toolset, env):
-    version = f" -vcvars_ver={toolset}" if toolset else ""
+def _run_vcvars(vcvars, argument, toolset, env, sdk=None):
+    version = (f" {sdk}" if sdk else "") + (f" -vcvars_ver={toolset}" if toolset else "")
     # cmd /u writes built-in command output (set) as UTF-16, independent of code pages.
     command = f'cmd.exe /d /u /s /c ""{vcvars}" {argument}{version} >nul 2>&1 && set"'
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, check=False)
@@ -276,6 +290,15 @@ def _run_vcvars(vcvars, argument, toolset, env):
     if result.returncode != 0 or "VSCMD_ARG_TGT_ARCH" not in values:
         raise SettingsError(f"vcvarsall failed for {argument}{version}")
     return values
+
+
+def configure_directory(build):
+    """The working directory of a configure: every path CMake gets is absolute.
+
+    CMake 4.2 crashes (0xC0000409) while detecting the C compiler of a new tree when the
+    working directory has non-ASCII characters, with every generator; the drive root is ASCII.
+    """
+    return Path(build).anchor or Path(build)
 
 
 # CMake File API ----------------------------------------------------------------------

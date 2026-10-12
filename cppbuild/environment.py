@@ -114,7 +114,7 @@ def _probe(settings, toolchain, options, label):
         (root / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
         try:
             generators.request_file_api(root / "build", "toolchains-v1")
-            configure = tooling.process(settings, toolchain.configure(root, root / "build"), root)
+            configure = tooling.process(settings, toolchain.configure(root, root / "build"), generators.configure_directory(root))
             results = [configure]
             info = None
             if configure.success:
