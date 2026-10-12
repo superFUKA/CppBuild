@@ -91,6 +91,13 @@ class ProjectSettingsData:
     # WINDOWS_EXPORT_ALL_SYMBOLS on the shared library: a DLL and its import library
     # without __declspec(dllexport). Other platforms export every symbol anyway.
     windows_export_all_symbols: bool = False
+    # Entry function of an EXECUTABLE; None is main. WinMain/wWinMain make a GUI program. Other
+    # names are linked with /ENTRY (MSVC only), which skips the C runtime's initialization.
+    entry_point: str | None = None
+    # A GUI program (/SUBSYSTEM:WINDOWS, CMake's WIN32_EXECUTABLE) rather than a console one.
+    gui: bool = False
+    # Libraries of the OS or toolchain linked by name, like ws2_32 or pthread.
+    system_libraries: list[str] = field(default_factory=list)
 
 
 @dataclass

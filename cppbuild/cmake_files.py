@@ -23,6 +23,8 @@ CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
 GOOGLETEST_URL = "https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip"
 GOOGLETEST_SHA256 = "1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4"
 COMPILED_SUFFIXES = {".cpp", ".cc", ".cxx"}
+# Built on Windows too: resource scripts (icons, version information) and manifests.
+WINDOWS_COMPILED_SUFFIXES = {".rc", ".manifest"}
 # Directory names the source scan never enters, here and in the generated CMake.
 SCAN_EXCLUDED = (".cppbuild", ".git", "build", "__pycache__", ".cache", ".venv")
 # The conventions between generated files (CPPBUILD_REQUEST_*, aliases, ...). A linked
@@ -79,8 +81,11 @@ endfunction()'''
 def _collect_function():
     # Two backslashes: CMake reads one of them as the escape of a quoted argument.
     excluded = "|".join(name.replace(".", "\\\\.") for name in SCAN_EXCLUDED)
-    compiled = "|".join("".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in suffix[1:])
-                        for suffix in sorted(COMPILED_SUFFIXES))
+    def pattern(suffixes):
+        return "|".join("".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in suffix[1:])
+                        for suffix in sorted(suffixes))
+    compiled = pattern(COMPILED_SUFFIXES)
+    windows = pattern(WINDOWS_COMPILED_SUFFIXES)
     marker = output_paths.MARKER
     return f"""function(_cppbuild_collect_sources result)
   set(_files)
@@ -120,9 +125,13 @@ def _collect_function():
   endwhile()
   list(REMOVE_DUPLICATES _files)
   list(SORT _files)
-  # Only these suffixes are compiled; other files are listed for the IDE.
+  # Only these suffixes are built; other files are listed for the IDE.
+  set(_built "{compiled}")
+  if(WIN32)
+    string(APPEND _built "|{windows}")
+  endif()
   set(_display ${{_files}})
-  list(FILTER _display EXCLUDE REGEX "\\\\.({compiled})$")
+  list(FILTER _display EXCLUDE REGEX "\\\\.(${{_built}})$")
   if(_display)
     set_source_files_properties(${{_display}} PROPERTIES HEADER_FILE_ONLY TRUE)
   endif()
@@ -458,6 +467,7 @@ def _links(project, providers):
             setup += [f"if(NOT TARGET {target})",
                       f"  message(FATAL_ERROR {arg('Missing external target ' + target)})", "endif()"]
             items.append(target)
+    items += project.settings._data.system_libraries
     return setup, items
 
 
@@ -481,10 +491,11 @@ def _target_body(project, kind, target, items, indent):
         definitions.append(scope + " " + " ".join(arg(d) for d in settings.public_definitions))
     if definitions:
         lines.append(f"target_compile_definitions({target} {' '.join(definitions)})")
+    lines.append(f'target_compile_options({target} {scope} "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>")')
     test = kind == ProjectType.TEST
     if items or test:
         lines.append(f"target_link_libraries({target} {scope} "
-                     + " ".join((["GTest::gtest_main"] if test else []) + items) + ")")
+                     + " ".join((["GTest::gtest_main", "GTest::gmock"] if test else []) + items) + ")")
     if not interface:
         headers = [arg(_relative(project.root, storage.contained(project.root, h), "A precompiled header"))
                    for h in data.project_headers]
@@ -556,7 +567,7 @@ def _test_setup():
             f'  set(CPPBUILD_GOOGLETEST_URL "{GOOGLETEST_URL}" CACHE STRING "GoogleTest 1.14.0 archive: URL or local ZIP path")',
             "  # Normal variables preset GoogleTest's options (CMP0077) without overriding the user's cache.",
             "  # Our targets use CMake's default DLL runtime, which GoogleTest must match.",
-            "  set(BUILD_GMOCK OFF)",
+            "  set(BUILD_GMOCK ON)",
             "  set(INSTALL_GTEST OFF)",
             "  set(gtest_force_shared_crt ON)",
             '  set(_cppbuild_googletest_url "${CPPBUILD_GOOGLETEST_URL}")',
@@ -576,6 +587,28 @@ def _test_setup():
             '    set(CMAKE_FOLDER "${_cppbuild_folder}")',
             "  endif()",
             "endif()"]
+
+
+def _entry_point(project, target):
+    data = project.settings._data
+    lines = []
+    if data.gui:
+        lines.append(f"set_target_properties({target} PROPERTIES WIN32_EXECUTABLE ON)")
+    if data.entry_point is not None and data.entry_point not in {"wmain", "WinMain", "wWinMain"}:
+        # Without main or WinMain the linker cannot infer the subsystem, so it is given too.
+        subsystem = "WINDOWS" if data.gui else "CONSOLE"
+        message = f"{project.name} uses the entry point {data.entry_point} (/ENTRY), which only MSVC-compatible linkers support"
+        lines += ["if(MSVC)",
+                  "  # The C runtime's startup code is not run before this function (no static constructors,",
+                  "  # no argv). The DLL runtime still initializes itself when loaded, but nothing pulls in its",
+                  "  # import libraries without the startup code, so they are linked by name (CMake's default",
+                  "  # runtime: the debug one for Debug).",
+                  f'  target_link_options({target} PRIVATE "/ENTRY:{data.entry_point}" "/SUBSYSTEM:{subsystem}")',
+                  f'  target_link_libraries({target} PRIVATE "$<IF:$<CONFIG:Debug>,ucrtd,ucrt>" "$<IF:$<CONFIG:Debug>,vcruntimed,vcruntime>")',
+                  "else()",
+                  f"  message(FATAL_ERROR {arg(message)})",
+                  "endif()"]
+    return lines
 
 
 def test_prefix(project):
@@ -619,6 +652,7 @@ def project_entry(project, providers):
                   "# Visual Studio debugs in the Project directory, where CppBuild's run and the tests start too.",
                   f'set_target_properties({target} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}")']
         lines += _target_body(project, initial, target, items, 0)
+        lines += _entry_point(project, target)
         lines += ["if(DISPLAY IN_LIST CPPBUILD_REQUESTED AND NOT CPPBUILD_WHOLE_SOLUTION)",
                   "  # Listed for the IDE only: shown, but not part of the default build.",
                   *_display_only(target, output_variable(project), 2),

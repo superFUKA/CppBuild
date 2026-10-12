@@ -1,5 +1,16 @@
 # 実装・検証記録
 
+## 2026-10-12 C++プログラムの基本設定（UTF-8、入口の関数、OSのライブラリ、リソース、gMock）
+
+- 依頼：C++開発で設定が必要な項目を洗い出し、入口の関数名を設定可能にし、「ないと明らかに困るもの」を追加する。入口の関数名は、ユーザーの選択で任意の名前を `/ENTRY` で直接入口にする方式（CRT未初期化を了承）。見送り：警告レベル、`/MP`、MSVCランタイムの切り替え、Cのソース、C++20モジュール、任意のオプション、F5の実行引数・環境変数。
+- 確認した不具合：日本語を含むUTF-8（BOMなし）のソースが、VS2022で `C4819`・`C2001` によりビルドできなかった（`/utf-8` なし）。CppBuildの `add_file` が書くファイルでも起きる。
+- 実装（生成）：全C++ターゲットに `target_compile_options(<t> <scope> "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8;/Zc:__cplusplus>")`（scopeは定義と同じ。`.rc` を `rc.exe` に渡さないよう言語でも絞る）。実行ファイルに `WIN32_EXECUTABLE`、標準以外の入口には `if(MSVC)` で `/ENTRY`・`/SUBSYSTEM` とCRTのインポートライブラリ、それ以外は `FATAL_ERROR`。リンクの末尾に `system_libraries`。ソースの収集で、`WIN32` のとき `.rc`・`.manifest` もビルド対象。TESTは `BUILD_GMOCK ON` と `GTest::gmock`。
+- 実装（設定）：`ProjectSettingsData.entry_point`（None＝main）・`gui`・`system_libraries`。既定値のときは `project.json` に書かず、schema_versionは変えない（書いたファイルは旧版のCppBuildでは読めない）。`set_entry_point` は `gui` 省略時に標準の名前から決め（標準以外はコンソール）、`"main"` は None として保存する。
+- 実測で直した点：`/ENTRY` ではCRTの開始処理のオブジェクトが引き込むはずのUCRTが既定のライブラリに入らず、Debugの `/RTC` の参照が `LNK2019` になった。DLL版のCRTのインポートライブラリを構成に合わせて明示リンクして解決（DLL版のCRTは読み込み時に自分で初期化される）。CppBuildはランタイムを切り替えないため、CMakeの既定（DLL版、Debugはデバッグ版）を前提にしている。
+- 試験：`tests/test_cpp_essentials.py`。単体3件（入口の保存・既定値で書かないこと・検証、OSのライブラリの保存・検証、生成内容）。実試験は VS2022（x64・Win32）・VS2026・Ninja の4環境×2件：日本語の文字列（UTF-8で6バイト）、`__cplusplus == 202002L`、`.rc` の文字列リソースの読み込み、`ws2_32` の `WSAStartup`、`wWinMain` と `/ENTRY`（コンソール・GUI）のPEのサブシステム、`/ENTRY` の終了コード（Debug・Release）、gMockの `MOCK_METHOD`。32ビットでも `/ENTRY` の名前の修飾が問題にならないことを確認した。
+- 影響：全ターゲットにコンパイルオプションが1行増え、TESTはgMockのビルドの分だけ時間が増える（利用シナリオ `testing` で、VS2022 32→50秒、Ninja 52→96秒、VS2026 34→51秒）。
+- 検証：全231件成功（3生成器の実ビルド、skipなし、625.7秒）。利用シナリオ7件が3生成器で全PASS（`.test-work/usage-20261012-194928-622561`、`-195223-913149`、`-195506-838206`）。VS上でF5を押す操作、GUIアプリの画面表示は試していない。未コミット。
+
 ## 2026-10-12 コンパイラ情報をFile APIから読む（案(b)）
 
 - 変更：`generators.compiler()` は、コンパイラの種類・版・パスをFile APIの `toolchains-v1`（CXX）から読む。アーキテクチャはFile APIにないため、従来どおりCMakeの記録（`CMakeCXXCompiler.cmake` の `CMAKE_CXX_COMPILER_ARCHITECTURE_ID`・`CMAKE_CXX_SIZEOF_DATA_PTR`、`CMakeSystem.cmake` の `CMAKE_SYSTEM_PROCESSOR`）から読む（`_recorded_architecture`）。File APIの回答がなければ種類・版・パスは `None` で、アーキテクチャの照合だけ行う。経緯と選択肢は[設計整理メモ](DESIGN_NOTES.md)冒頭。

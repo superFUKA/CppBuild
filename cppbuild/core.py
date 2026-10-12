@@ -28,6 +28,25 @@ def _strings(values):
         raise SettingsError("Expected a list of strings without NUL")
 
 
+# Entry functions the toolchain finds by itself, and whether each one makes a GUI program.
+STANDARD_ENTRY_POINTS = {"main": False, "wmain": False, "WinMain": True, "wWinMain": True}
+
+
+def _entry_point(values):
+    entry, gui = values.entry_point, values.gui
+    if type(gui) is not bool:
+        raise SettingsError("gui must be boolean")
+    if entry is not None and (not isinstance(entry, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", entry)):
+        raise SettingsError("entry_point must be a C identifier")
+    if entry == "main":
+        raise SettingsError("entry_point None means main")
+    if (entry is not None or gui) and values.initial_type != ProjectType.EXECUTABLE:
+        raise SettingsError("Only an EXECUTABLE has an entry point and a subsystem")
+    expected = STANDARD_ENTRY_POINTS.get(entry or "main")
+    if expected is not None and gui != expected:
+        raise SettingsError(f"{entry or 'main'} is the entry of a {'GUI' if expected else 'console'} program")
+
+
 def _build_settings(value, seen=None):
     from .output_paths import validate
     if isinstance(value, ProjectBuildSettings):
@@ -168,6 +187,13 @@ class ProjectSettings(_Settings):
                 raise SettingsError("Invalid system header")
         if type(values.windows_export_all_symbols) is not bool:
             raise SettingsError("windows_export_all_symbols must be boolean")
+        _entry_point(values)
+        _strings(values.system_libraries)
+        for library in values.system_libraries:
+            if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", library):
+                raise SettingsError(f"A system library is a plain name like ws2_32 or pthread: {library!r}")
+        if len(set(values.system_libraries)) != len(values.system_libraries):
+            raise SettingsError("Duplicate system library")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
@@ -184,6 +210,9 @@ class ProjectSettings(_Settings):
             raw.setdefault("initial_type", None)
         # Written only when enabled, so existing files and older readers are unaffected otherwise.
         export_all = raw.pop("windows_export_all_symbols", False)
+        entry_point = raw.pop("entry_point", None)
+        gui = raw.pop("gui", False)
+        system_libraries = raw.pop("system_libraries", [])
         storage.object_fields(raw, {"name", "source_directories", "types", "dependencies", "project_headers", "system_headers", "guid", "initial_type"})
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
@@ -214,7 +243,7 @@ class ProjectSettings(_Settings):
         except (TypeError, ValueError) as exc:
             raise SettingsError("Unsupported initial Project type") from exc
         values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default,
-                                    export_all)
+                                    export_all, entry_point, gui, system_libraries)
         if version < 4:
             self._complete_types(values)
         self._validate(values, legacy=version < 3)
@@ -260,6 +289,12 @@ class ProjectSettings(_Settings):
                    "initial_type": values.initial_type.value}
         if values.windows_export_all_symbols:
             payload["windows_export_all_symbols"] = True
+        if values.entry_point is not None:
+            payload["entry_point"] = values.entry_point
+        if values.gui:
+            payload["gui"] = True
+        if values.system_libraries:
+            payload["system_libraries"] = values.system_libraries
         documents[self.path] = storage.document(self.path, "project", payload, version=version)
         return documents
 
@@ -354,6 +389,26 @@ class ProjectSettings(_Settings):
         """Export every symbol of the shared library on Windows (CMake's WINDOWS_EXPORT_ALL_SYMBOLS)."""
         values = self.get()
         values.windows_export_all_symbols = enabled
+        return self.save(values)
+
+    def set_entry_point(self, function="main", *, gui=None):
+        """The entry function of an EXECUTABLE.
+
+        main, wmain, WinMain and wWinMain are found by the toolchain as usual; WinMain and
+        wWinMain make a GUI program. Any other name is linked with /ENTRY (MSVC only): the C
+        runtime is then not initialized. gui selects the subsystem for such a name.
+        """
+        values = self.get()
+        if gui is None:
+            gui = STANDARD_ENTRY_POINTS.get(function, False)
+        values.entry_point = None if function == "main" else function
+        values.gui = gui
+        return self.save(values)
+
+    def set_system_libraries(self, libraries=()):
+        """Libraries of the OS or toolchain linked by name (ws2_32, d3d11, pthread, ...)."""
+        values = self.get()
+        values.system_libraries = list(libraries)
         return self.save(values)
 
 

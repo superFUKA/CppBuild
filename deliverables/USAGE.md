@@ -46,7 +46,7 @@ build/bin/Release/App.exe
 | `CPPBUILD_GOOGLETEST_URL` | GoogleTest 1.14.0のURLまたはローカルZIP（SHA256は固定で検証） |
 | `BUILD_TESTING` | CTestの標準の切り替え（既定ON）。OFFならTEST Projectを構成せず、GoogleTestも取得しない |
 
-GoogleTestの `BUILD_GMOCK`・`INSTALL_GTEST`・`gtest_force_shared_crt` は通常の変数で既定値を与えるだけで、利用者が `-D` で指定した値を上書きしない。実行ファイルのinclude・定義・リンクは `PRIVATE`。
+GoogleTestの `BUILD_GMOCK`（2026-10-12からON）・`INSTALL_GTEST`・`gtest_force_shared_crt` は通常の変数で既定値を与えるだけで、利用者が `-D` で指定した値を上書きしない。実行ファイルのinclude・定義・リンクは `PRIVATE`。
 
 <a id="output-directories"></a>
 
@@ -344,6 +344,26 @@ ecs.set_build_settings(SolutionBuildSettings(project_types={stl_guid: ProjectTyp
 - 探索対象は、探索ディレクトリ直下の各ディレクトリにある `.cppbuild/project.json`（Solution）だけ。再帰的には探さない。同じGUIDが2か所にあるとエラーになる。
 - 依存先Projectの `ProjectBuildSettings(project_type=...)` でも、静的⇔共有を切り替えられる。外部Solution内のProjectは、最上位の `project_types`（GUID指定）で切り替える。
 - 2026-10-07追加：Windowsで `__declspec(dllexport)` を付けていないライブラリを共有にすると、DLLにインポートライブラリ（.lib）ができず、利用側のリンクが `LNK1104` で失敗する。ライブラリProjectで `project.settings.set_windows_export_all_symbols()` を呼ぶと、生成する共有ライブラリのターゲットにCMakeの `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付け、ソースを変えずに静的⇔共有を切り替えられる。Project単位の保存する管理設定（`ProjectSettingsData.windows_export_all_symbols`、既定False、`False` を渡すと解除）で、生成ファイルに書くためCppBuildなしのビルドにも効く。静的・INTERFACEの形式とWindows以外には影響しない。Solution単位の設定は設けない（CppBuildなしでは、CMake標準の `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON` を構成時に渡せば全ターゲットに効く）。データメンバー（変数）は書き出されないため、DLL越しに使う変数には従来どおり `__declspec(dllimport)` が必要。
+
+# C++プログラムの基本設定（2026-10-12追加）
+
+```python
+# 入口の関数。main（既定）・wmain・WinMain・wWinMain はツールチェーンが通常どおり見つける。
+# WinMain・wWinMain はGUIアプリ（/SUBSYSTEM:WINDOWS）になる。
+app.settings.set_entry_point("wWinMain")
+# それ以外の名前は /ENTRY でリンクする（MSVC専用）。gui でサブシステムを選ぶ（既定はコンソール）。
+app.settings.set_entry_point("AppMain", gui=True)
+app.settings.set_entry_point()  # main に戻す
+
+# OSやツールチェーンのライブラリを名前でリンクする（ライブラリなら利用側にも伝わる）
+net.settings.set_system_libraries(["ws2_32"])
+```
+
+- **MSVCの既定**：生成するすべてのC++ターゲットに、MSVCのとき `/utf-8`（ソースと実行時の文字コードをUTF-8にする）と `/Zc:__cplusplus`（`__cplusplus` を選んだ標準の値にする）を付ける。ライブラリでは利用側にも伝わる（ヘッダーも同じ読み方が必要なため）。従来は、日本語を含むUTF-8（BOMなし）のソースがコードページ932として読まれ、文字列があるとビルドが失敗していた（`C4819`・`C2001`）。clang-clはもともとUTF-8で読むため対象外。
+- **入口の関数**（実行ファイルのProjectだけ、保存する管理設定 `entry_point`・`gui`、既定のときは `project.json` に書かない）：`WinMain`・`wWinMain` を選ぶとCMakeの `WIN32_EXECUTABLE` を付ける。標準以外の名前は `/ENTRY:<名前>` と `/SUBSYSTEM:CONSOLE`／`WINDOWS` でリンクする。CRTの開始処理を通らないため、グローバル変数のコンストラクター・`atexit`・コマンドライン引数の準備は行われない。DLL版のCRTは読み込み時に自分で初期化されるため、そのインポートライブラリ（Debugは `ucrtd`・`vcruntimed`、それ以外は `ucrt`・`vcruntime`）をリンクし、CRTの関数は使える。関数は `extern "C"` で定義する。MSVC以外では構成時にエラー。標準の名前と `gui` の食い違い（`main` でGUIなど）や、実行ファイル以外への指定はエラー。
+- **OSのライブラリ**（保存する管理設定 `system_libraries`）：`ws2_32`・`d3d11`・`pthread` のような名前だけを受け付ける（パス・`-l` 付き・空白は不可）。`target_link_libraries` に名前のまま渡す。従来は `ImportedLibrary` でファイルのパスを指定するしかなかった。
+- **リソースとマニフェスト**：Windowsでは、ソースディレクトリの `.rc`（アイコン・バージョン情報・文字列）と `.manifest` もビルドする（従来は表示だけ）。
+- **gMock**：TESTのProjectで `BUILD_GMOCK` を既定ONにし、`GTest::gmock` もリンクする。`#include <gmock/gmock.h>` と `MOCK_METHOD` が使える。
 
 # gitのURLによるリンクと自動取得（2026-10-03追加）
 

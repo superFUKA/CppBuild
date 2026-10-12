@@ -283,6 +283,8 @@ project.settings.set_pch(project_headers=..., system_headers=...)／clear_pch()�
 
 2026-10-07追加（PCHと同じ形の保存設定）：`project.settings.set_windows_export_all_symbols(enabled=True)` は `ProjectSettingsData.windows_export_all_symbols` を保存し、生成する共有ライブラリのターゲットへ `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付ける。`project.json` にはTrueのときだけ書く（既存ファイルの内容は変わらない）。
 
+2026-10-12追加（同じ形の保存設定）：`project.settings.set_entry_point(function="main", *, gui=None)` は実行ファイルの入口の関数とGUIかどうか（`ProjectSettingsData.entry_point`・`gui`）、`project.settings.set_system_libraries(libraries=())` は名前でリンクするOSのライブラリ（`ProjectSettingsData.system_libraries`）を保存する。いずれも既定値のときは `project.json` に書かない。使い方と制約は[利用手順](USAGE.md)の「C++プログラムの基本設定」。
+
 <a id="environment"></a>
 
 ## ジャンル10：環境チェック
