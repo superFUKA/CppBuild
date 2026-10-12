@@ -1,5 +1,9 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-12）
+
+- **Visual Studioの起動対象（未コミット）**：生成するSolutionの `CMakeLists.txt` が `VS_STARTUP_PROJECT` を設定する。`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（Project名順）のうち構成された最初。F5でALL_BUILDが起動され「プログラムを開始できません」になる不具合の修正。全214件成功（3生成器の実ビルド、skipなし）。利用シナリオ・VS上のF5操作は未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。
+
 ## 最新の追加（2026-10-11）
 
 - **CppBuildが書いていないターゲットのフォルダー（`2b901f1` でコミット済み、CMakeの既定ターゲットの分は未コミット）**：`SolutionFolderSettings.external`（既定 `"External"`）。フォルダー分けが有効なとき、GoogleTest（`gtest`・`gtest_main`）を、リンク先が取り込む分も含めて最上位Solutionのこのフォルダーの `GoogleTest` へ、CMakeの既定ターゲット（ALL_BUILD等）を `CMake` へ置く（後者は未コミット）。無効時は従来どおり。全210件成功（3生成器の実ビルド、skipなし）。利用シナリオは未実行。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。

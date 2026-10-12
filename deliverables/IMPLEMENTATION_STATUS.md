@@ -1,5 +1,11 @@
 # 実装・検証記録
 
+## 2026-10-12 Visual Studioの起動対象（VS_STARTUP_PROJECT）
+
+- 現象（報告）：実行ファイルのProjectを持つSolutionをVS2022で開いてF5を押すと、ALL_BUILD が起動対象になり「プログラムを開始できません」になる。生成するCMakeに `VS_STARTUP_PROJECT` がなく、.slnの先頭のProjectが選ばれていた。
+- 実装：`cmake_files.solution_entry()` が、所属Projectの `add_subdirectory` の後、Solutionを丸ごと構成するとき（`CPPBUILD_WHOLE_SOLUTION`）だけ、候補のうち存在する最初のターゲットをそのディレクトリの `VS_STARTUP_PROJECT` に設定する。候補（`startup_candidates()`）は、`main_project` が実行ファイル・TESTならそれ、次に実行ファイル、次にTEST（それぞれProject名順）。生成内容は保存した管理設定だけで決まるようにするため、非保存の `run_projects` は使わない。`if(TARGET)` で選ぶので、`BUILD_TESTING=OFF` でTESTが構成されなければ次の候補になる。リンク先として取り込まれたSolutionは設定しない（存在しないターゲットを指すとCMakeが警告するため）。CppBuildを使わない親に `add_subdirectory` された場合も、そのSolution自身の .sln にだけ効く。`CPPBUILD_FORMAT` は上げていない。
+- 試験：`tests/test_startup_project.py` に、候補の順・ライブラリの `main_project` を飛ばすこと・リンク先のプログラムを候補にしないことの単体試験2件と、実VS2022（.slnの先頭）・実VS2026（.slnxの `DefaultStartup`）で `main_project` のTESTが起動対象になり、素のcmakeで `BUILD_TESTING=OFF` にすると実行ファイルへ移ることの実試験2件。全214件成功（3生成器の実ビルド、skipなし、407.9秒）。利用シナリオは未実行。VS上でF5を押す操作そのものは試していない（生成された .sln／.slnx の内容で確認）。未コミット。
+
 ## 2026-10-11 CppBuildが取り込むターゲットのフォルダー（External）
 
 - 要望：フォルダー分けが有効なとき、CppBuildが自分で取り込むもの（現在はGoogleTestの `gtest`・`gtest_main`）を専用のフォルダーへ置く。リンク先が取り込むGoogleTestも同じ所へ。名前は設定で変えられ、既定は External。無効時は従来どおり。

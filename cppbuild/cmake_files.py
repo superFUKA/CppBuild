@@ -227,7 +227,28 @@ def solution_entry(solution):
                 lines.append(f"    set(CMAKE_FOLDER {arg(folder)})")
             lines.append("  endif()")
         lines += [f"  add_subdirectory({arg(_relative(solution.root, project.root, 'A Project directory'))})", "endif()"]
+    candidates = startup_candidates(solution)
+    if candidates:
+        lines += ["", "# Visual Studio starts the first program that exists (a TEST only with BUILD_TESTING);",
+                  "# without it, F5 would start ALL_BUILD, the first project of the .sln.",
+                  "if(CPPBUILD_WHOLE_SOLUTION)",
+                  f"  foreach(_cppbuild_startup IN ITEMS {' '.join(candidates)})",
+                  "    if(TARGET ${_cppbuild_startup})",
+                  "      set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT ${_cppbuild_startup})",
+                  "      break()",
+                  "    endif()",
+                  "  endforeach()",
+                  "endif()"]
     return "\n".join(lines) + "\n"
+
+
+def startup_candidates(solution):
+    """Targets Visual Studio may start, best first: main_project, then EXECUTABLEs, then TESTs by name."""
+    runnable = {ProjectType.EXECUTABLE: 0, ProjectType.TEST: 1}
+    main = solution.settings._data.main_project
+    projects = [p for p in solution.projects() if p.settings._data.initial_type in runnable]
+    projects.sort(key=lambda p: (p.name != main, runnable[p.settings._data.initial_type], p.name))
+    return [base_name(p) for p in projects]
 
 
 # Top level ---------------------------------------------------------------------
