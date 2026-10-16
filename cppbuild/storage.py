@@ -12,6 +12,9 @@ from pathlib import Path
 import tempfile
 
 from .models import SettingsConflictError, SettingsError
+from . import logs
+
+_log = logs.logger("storage")
 
 
 CURRENT_SCHEMA = 4
@@ -23,7 +26,9 @@ def encoded(value):
 
 def read_json(path):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        text = Path(path).read_text(encoding="utf-8")
+        logs.read(path, text)
+        return json.loads(text)
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise SettingsError(f"Invalid JSON: {path}") from exc
 
@@ -89,6 +94,7 @@ def before_directory(directory):
 def after_write(path, data):
     current = _journal.get()
     if current is not None and path is not None:
+        _log.debug("transaction recorded %s", path)
         current.latest[path] = data
 
 
@@ -105,12 +111,14 @@ def atomic_write(path, data):
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+    logs.wrote(path, data)
     after_write(recorded, data)
 
 
 def rename_no_replace(source, destination):
     """Rename without replacing an existing destination, including one created concurrently."""
     source, destination = Path(source), Path(destination)
+    _log.info("move %s -> %s", source, destination)
     if os.name == "nt":
         # Windows rename refuses any existing destination, so retrying cannot overwrite.
         # Scanners/indexers briefly hold new files open (WinError 5/32); wait for them.
@@ -163,9 +171,11 @@ def publish_documents(documents):
             atomic_write(path, content)
     except BaseException as failure:
         try:
+            _log.warning("publish failed (%s: %s); restoring %d file(s)", type(failure).__name__, failure, len(written))
             for path, previous in reversed(written):
                 if previous is None:
                     path.unlink(missing_ok=True)
+                    logs.removed(path)
                 elif not path.exists() or path.read_bytes() != previous:
                     atomic_write(path, previous)
         except OSError as recovery:
@@ -183,12 +193,15 @@ def write_lock(directory):
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
+        _log.warning("lock is held: %s", lock)
         raise SettingsConflictError(f"Settings are locked: {lock}") from exc
+    _log.debug("lock acquired: %s", lock)
     try:
         os.close(fd)
         yield
     finally:
         lock.unlink()
+        _log.debug("lock released: %s", lock)
 
 
 @contextmanager

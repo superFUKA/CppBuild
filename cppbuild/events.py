@@ -4,6 +4,9 @@ from functools import wraps
 import uuid
 
 from .models import SettingsError
+from . import logs
+
+_log = logs.logger("events")
 
 
 OPERATIONS = {"update", "build", "rebuild", "clean", "run", "test"}
@@ -48,6 +51,11 @@ class Dispatcher:
         if len(self.stack) >= 32:
             return ["Event nesting limit exceeded; remaining notifications skipped"]
         errors = []
+        if _log.isEnabledFor(logs.logging.DEBUG):
+            listeners = sum(1 for name, _ in self.callbacks.values() if name == event.name)
+            _log.debug("event %s project=%s paths=%s success=%s error=%r listeners=%d", event.name,
+                       getattr(event.project, "name", None), [str(p) for p in event.changed_paths],
+                       None if event.result is None else getattr(event.result, "success", "?"), event.error, listeners)
         self.stack.append(event.name)
         try:
             for key, (name, callback) in tuple(self.callbacks.items()):
@@ -57,6 +65,8 @@ class Dispatcher:
                 try:
                     callback(event)
                 except Exception as exc:
+                    _log.warning("event callback %s for %s raised %s: %s", key, event.name, type(exc).__name__, exc,
+                                 exc_info=True)
                     errors.append(f"{event.name}/{key}: {type(exc).__name__}: {exc}")
                 finally:
                     self.active.remove(key)

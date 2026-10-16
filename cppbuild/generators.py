@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 from .models import ARCHITECTURES, CMakeSettings, InvalidValueError, SettingsError
-from . import storage, tooling
+from . import logs, storage, tooling
 
 VISUAL_STUDIO = {"Visual Studio 17 2022": ("vs2022", ".sln"), "Visual Studio 18 2026": ("vs2026", ".slnx")}
 NINJA_MULTI_CONFIG = "Ninja Multi-Config"
@@ -233,9 +233,11 @@ def _vs_installations():
     vswhere = Path(root) / "Microsoft Visual Studio/Installer/vswhere.exe"
     if not vswhere.is_file():
         return []
+    command = [str(vswhere), "-products", "*", "-format", "json", "-utf8"]
     try:
-        result = subprocess.run([str(vswhere), "-products", "*", "-format", "json", "-utf8"],
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+        with logs.command(command) as finished:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+            finished(result.returncode, result.stdout.decode("utf-8", errors="replace"))
         data = json.loads(result.stdout.decode("utf-8") or "[]")
     except (OSError, ValueError):
         return []
@@ -280,7 +282,10 @@ def _run_vcvars(vcvars, argument, toolset, env, sdk=None):
     version = (f" {sdk}" if sdk else "") + (f" -vcvars_ver={toolset}" if toolset else "")
     # cmd /u writes built-in command output (set) as UTF-16, independent of code pages.
     command = f'cmd.exe /d /u /s /c ""{vcvars}" {argument}{version} >nul 2>&1 && set"'
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, check=False)
+    with logs.command([command], env=env) as finished:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, check=False)
+        # The output is the whole environment: what it changes shows in the commands that use it.
+        finished(result.returncode)
     output = result.stdout.decode("utf-16-le", errors="replace")
     values = {}
     for line in output.splitlines():

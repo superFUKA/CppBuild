@@ -4,6 +4,19 @@
 
 更新日：2026-09-17。設計資料。実装・自動テスト・CMake実ビルド検証は未着手。
 
+## 2026-10-16追加：詳細ログ
+
+依頼（2026-10-16）：AIが読んで問題を解決できるよう、さまざまな操作で詳細なログを残す設定。有効・無効とレベルを設定できること。使い方は[利用手順](USAGE.md)の「詳細ログ」。
+
+| 入口 | 内容 |
+| --- | --- |
+| `cppbuild.configure_logging(settings)` | `LogSettings` を適用し、適用した設定（`file` は絶対パス）を返す。Noneで無効。不正な値は `InvalidValueError` |
+| `cppbuild.log_settings()` | 今の設定 |
+| `LogSettings(enabled=True, level="DEBUG", file=None, console=None, format="text", append=True)` | `level` は `LOG_LEVELS`（`ERROR`・`WARNING`・`INFO`・`DEBUG`・`TRACE`）、`format` は `text`・`json` |
+| 環境変数 `CPPBUILD_LOG`・`CPPBUILD_LOG_FILE`・`CPPBUILD_LOG_FORMAT` | 読み込み時に有効にする |
+
+設定はプロセス全体に効き、保存しない（Solutionの設定ではない）。
+
 ## 2026-10-13追加：CppBuildを組み込むプログラム向けのAPI
 
 依頼（2026-10-13、CppBuildを組み込む側から）：利用側がCppBuildの内部の決まり（ファイルの置き方、例外の文言、検証の内容）を写さずに済むようにする。ユーザーの指示で、検討した9項目のうち8項目を実装し、1項目（テンプレートの素材）は既存の動作の明文化とした。使い方は[利用手順](USAGE.md)の「CppBuildを組み込むプログラム向けの機能」、判断は[設計整理メモ](DESIGN_NOTES.md)冒頭。

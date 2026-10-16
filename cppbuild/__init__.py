@@ -21,6 +21,11 @@ from .models import (
 from .git_sources import FetchReport, GitSourceStatus, UnlinkReport
 from .transactions import TransactionReport
 from .generators import SUPPORTED as GENERATORS
+from .logs import LogSettings, configure_logging, log_settings, TRACE as LOG_TRACE
+from . import logs as _logs
+
+LOG_LEVELS = tuple(_logs.LEVELS)
+_logs._from_environment()
 
 __all__ = [
     "SolutionFolderSettings", "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
@@ -37,4 +42,5 @@ __all__ = [
     "InvalidValueError", "AlreadyRegisteredError", "NotRegisteredError", "NoMainProjectError",
     "CONFIGURATIONS", "ARCHITECTURES", "CPP_STANDARDS", "MSVC_RUNTIMES", "LIBRARY_TYPES", "SWITCHABLE_TYPES", "GENERATORS",
     "FileKind", "TransactionReport", "UnlinkReport",
+    "LogSettings", "configure_logging", "log_settings", "LOG_TRACE", "LOG_LEVELS",
 ]

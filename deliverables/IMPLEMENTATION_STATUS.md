@@ -1,5 +1,15 @@
 # 実装・検証記録
 
+## 2026-10-16 詳細ログ
+
+- 依頼：AIが読んで問題を解決できるよう、いろいろな操作で詳細なログを残す設定。有効・無効とレベルを設定できること。
+- 追加：`cppbuild/logs.py`。`LogSettings`・`configure_logging`・`log_settings`・`LOG_LEVELS`・`LOG_TRACE`、環境変数 `CPPBUILD_LOG`・`CPPBUILD_LOG_FILE`・`CPPBUILD_LOG_FORMAT`。Python標準の `logging`（ロガー `cppbuild`）を使い、既定は無効。形式はテキストとJSON Lines。判断は[設計整理メモ](DESIGN_NOTES.md)冒頭、使い方は[利用手順](USAGE.md)の「詳細ログ」。
+- 記録する箇所：公開API（`Solution`・`Project`・`ProjectSettings`・`SolutionSettings`・`TemplateTools`・`Environment` にデコレーター `logs.api`）の呼び出し・引数・戻り値・例外・所要時間と呼び出し番号、子プロセス（`engine.process`、gitの `_git`、vswhere、vcvarsall）のコマンド・作業ディレクトリ・環境変数の差・出力・終了コード、`storage` の書き込み・JSONの読み込み・移動・ロック・発行失敗時の復元、ビルド出力・cloneの削除、構成を省いた・省かなかった理由（`engine._configured`、判定の内容は変えていない）、イベント通知とコールバックの例外、トランザクション。秘密に見える名前の環境変数とURLのパスワードは伏せる。
+- 試験：`tests/test_logging.py` 12件（既定で無効、INFO・DEBUG・TRACEで記録する範囲、JSON Lines、例外のトレースバック、無効化と追記、ファイルなしで標準エラー、不正な値、コマンドの出力と伏せ字、失敗したコマンドの警告、環境変数）。
+- 検証：全285件成功（VS2022・VS2026・Ninjaの実ビルド、skipなし、817.2秒）。同じ全件を `CPPBUILD_LOG=TRACE` で記録しながら実行しても全件成功（816.4秒、ログ83MB、loggingの内部エラー・reprの失敗なし）で、ログの有無で時間はほぼ変わらなかった。1つのProjectの最初のビルドで、ログは `DEBUG` 約22KB、`TRACE` 約137KB。利用シナリオは未実行。未コミット。
+- 気づいた点（未対応）：CMakeの出力の中に入ったMSBuildの日本語のメッセージが、ログでも `ProcessReport.output` でも文字化けすることがある（パスが長すぎて構成が失敗した例で確認）。1行の中で文字コードが混ざるためと思われるが、原因は調べていない。
+- 作業ツリー：作業前から、2026-10-13の「CppBuildを組み込むプログラム向けのAPI」（`transactions.py`・`file_kinds.py` 等）が未コミットで残っていた。今回はその `transactions.py`・`storage.py` にもログを足した。
+
 ## 2026-10-13 Visual Studioのプロパティに相当する設定と既存の問題の修正
 
 - 依頼：VS2022のプロパティでよく使う設定のうちCppBuildから設定できないものを、CppBuildが意図して制限している箇所を除いて実装し、既存の問題も直す。意図した制限として除いたもの：出力ファイル名（Project名で固定、衝突検査のため）、F5の実行引数・環境変数（実行引数は保存しないビルド設定のため）。

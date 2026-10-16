@@ -21,7 +21,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from . import storage, tooling
+from . import logs, storage, tooling
 from .models import FetchFailure, GitFetchError, GitSource, GitSourceConflictError, NotRegisteredError, SettingsError
 
 COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
@@ -206,8 +206,10 @@ def _git(tools, args, cwd=None):
     executable = shutil.which(tools.git, path=env.get("PATH", ""))
     if executable is None:
         raise _Failure(f"git was not found ({tools.git})")
-    result = subprocess.run([executable, *args], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace")
+    with logs.command([executable, *args], cwd, env) as finished:
+        result = subprocess.run([executable, *args], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace")
+        finished(result.returncode, result.stdout + result.stderr)
     return result.returncode, result.stdout.strip(), " ".join(result.stderr.split())
 
 
@@ -254,6 +256,7 @@ def _remove(path):
         shutil.rmtree(path, onexc=writable)
     else:
         shutil.rmtree(path, onerror=writable)
+    logs.removed(path, "directory")
 
 
 def clone(tools, url, revision, directory, path):

@@ -15,7 +15,9 @@ import sys
 
 from .models import ProjectType, SettingsError
 from . import storage
-from . import tooling, information, generators, output_paths, cmake_files
+from . import tooling, information, generators, output_paths, cmake_files, logs
+
+_log = logs.logger("engine")
 
 OWNER = "cppbuild-owner.json"
 CACHE = "cppbuild-cache.cmake"
@@ -80,10 +82,13 @@ class FileOperationReport:
 
 def process(command, cwd, env=None):
     command = tuple(str(arg) for arg in command)
-    result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, shell=False,
-                            env=dict(os.environ) if env is None else env)
-    return ProcessReport(command, result.returncode, decode_output(result.stdout))
+    with logs.command(command, cwd, env) as finished:
+        result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, shell=False,
+                                env=dict(os.environ) if env is None else env)
+        output = decode_output(result.stdout)
+        finished(result.returncode, output)
+    return ProcessReport(command, result.returncode, output)
 
 
 def decode_output(data):
@@ -173,9 +178,12 @@ def configure(plan, settings):
     cache_text = plan.cache_script(toolchain)
     command = [*toolchain.configure(solution.root, build), "-C", cache]
     fingerprint = _fingerprint(plan, settings, command, cache_text)
+    _log.debug("configure %s with %s (fingerprint %s)", build, toolchain.generator, fingerprint)
     if _configured(plan, build, fingerprint):
         compiler = generators.compiler(build)
-        if generators.verify(toolchain, compiler) is None:
+        mismatch = generators.verify(toolchain, compiler)
+        _log.debug("build tree is current; compiler check: %s", mismatch or "matches")
+        if mismatch is None:
             result = ProcessReport(tuple(str(c) for c in command), 0,
                                    "CMake was not run: the build tree is already configured from the same input.\n",
                                    skipped=True)
@@ -240,20 +248,27 @@ def _inputs(build):
 def _configured(plan, build, fingerprint):
     try:
         record = storage.read_json(build / CONFIGURED)
-    except (OSError, SettingsError):
+    except (OSError, SettingsError) as exc:
+        _log.debug("configure needed: no record of the last configure (%s)", exc)
         return False
     if (not isinstance(record, dict) or record.get("version") != CONFIGURED_VERSION
             or record.get("fingerprint") != fingerprint or not (build / "CMakeCache.txt").is_file()
             or generators.file_api_reply(build, "codemodel-v2") is None):
+        _log.debug("configure needed: input fingerprint, CMakeCache.txt or File API reply differs")
         return False
     for path, text in plan.documents().items():
         try:
             if Path(path).read_bytes() != text.encode("utf-8"):
+                _log.debug("configure needed: generated file changed: %s", path)
                 return False
-        except OSError:
+        except OSError as exc:
+            _log.debug("configure needed: generated file unreadable: %s (%s)", path, exc)
             return False
-    return all(isinstance(item, list) and len(item) == 2 and _stat(item[0]) == item[1]
-               for item in record.get("inputs", []))
+    for item in record.get("inputs", []):
+        if not (isinstance(item, list) and len(item) == 2 and _stat(item[0]) == item[1]):
+            _log.debug("configure needed: CMake input changed: %s", item[0] if isinstance(item, list) and item else item)
+            return False
+    return True
 
 
 def codemodel(build):
@@ -521,10 +536,12 @@ def _remove_outputs(build, name, configuration):
     for path in artifacts(build, name, configuration):
         if path.is_file():
             path.unlink()
+            logs.removed(path)
             removed.append(str(path))
     objects = storage.contained(build, data["paths"]["build"]) / "CMakeFiles" / f"{name}.dir" / configuration
     if objects.is_dir():
         shutil.rmtree(objects)
+        logs.removed(objects, "directory")
         removed.append(str(objects))
     return ProcessReport((), 0, f"Cleaned {name} ({configuration}): " + (", ".join(removed) or "nothing built"))
 

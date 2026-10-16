@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 
-from . import storage, output_paths, cmake_files
+from . import storage, output_paths, cmake_files, logs
 from .models import AlreadyRegisteredError, CMakePackage, CMakeSource, Dependency, ImportedLibrary, NotRegisteredError, SettingsError
 
 
@@ -206,6 +206,7 @@ def _snapshot(solution, destination, name, *, template):
     return destination
 
 
+@logs.api
 class TemplateTools:
     @staticmethod
     def create_solution_template(solution, destination_directory):

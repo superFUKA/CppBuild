@@ -17,7 +17,7 @@ from .models import (
 from . import storage
 from . import dependencies as dependency_data
 from .events import Dispatcher, operation
-from . import tooling, generators
+from . import tooling, generators, logs
 
 
 def _name(value):
@@ -184,6 +184,7 @@ def _build_settings(value, seen=None):
             _build_settings(data, seen)
 
 
+@logs.api
 class _Settings:
     def get(self):
         self.owner._check_active()
@@ -195,6 +196,7 @@ class _Settings:
                 raise SettingsConflictError(f"Settings changed externally; reload first: {path}")
 
 
+@logs.api
 class ProjectSettings(_Settings):
     def __init__(self, owner):
         self.owner = owner
@@ -572,6 +574,7 @@ class ProjectSettings(_Settings):
         return self.save(values)
 
 
+@logs.api
 class SolutionSettings(_Settings):
     def __init__(self, owner):
         self.owner = owner
@@ -736,6 +739,7 @@ class SolutionSettings(_Settings):
         return self.save(values)
 
 
+@logs.api
 class Project:
     def __init__(self, solution, root, name):
         self.solution, self.root, self.name = solution, Path(root).resolve(), name
@@ -868,6 +872,7 @@ class Project:
         return check_owner(self)
 
 
+@logs.api
 class Solution:
     def __init__(self, root):
         self.root = Path(root).resolve()

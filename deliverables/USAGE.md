@@ -85,6 +85,53 @@ python -m examples.google_test .test-work/my-offline-test C:/archives/v1.14.0.zi
 
 `google_test`は作成・ビルド・CTest実行、`complete_workflow`は共有素材、イベントによるテスト追加、環境診断、全体ビルド・テスト、テンプレート作成・復元後の再テストを行う。
 
+<a id="logging"></a>
+
+## 詳細ログ（2026-10-16）
+
+CppBuildが行った操作を、AIが読んで問題を調べられるくらい細かく記録する。既定は無効で、設定は保存しない（プロセスごとに指定する）。
+
+```python
+import cppbuild
+from cppbuild import LogSettings
+
+cppbuild.configure_logging(LogSettings(level="DEBUG", file="logs/cppbuild.log"))   # 有効にする
+cppbuild.configure_logging(LogSettings(level="TRACE", file="logs/cppbuild.jsonl", format="json"))
+cppbuild.configure_logging(None)            # 無効にする（LogSettings(enabled=False) も同じ）
+cppbuild.log_settings()                     # 今の設定（file は絶対パス）
+```
+
+| 項目 | 既定 | 内容 |
+| --- | --- | --- |
+| `enabled` | True | Falseで無効 |
+| `level` | `"DEBUG"` | `ERROR`・`WARNING`・`INFO`・`DEBUG`・`TRACE`（大文字小文字を問わない。一覧は `cppbuild.LOG_LEVELS`） |
+| `file` | None | 書き出すファイル。相対パスは設定した時点の作業ディレクトリ基準。ディレクトリがなければ作る。UTF-8 |
+| `console` | None | 標準エラーにも出す。Noneは `file` がないときだけ出す |
+| `format` | `"text"` | `"text"`（1行1件）か `"json"`（JSON Lines。`time`・`level`・`logger`・`thread`・`call`・`depth`・`message`、あれば `data`・`exception`） |
+| `append` | True | Falseなら設定時にファイルを空にする |
+
+レベルごとに記録するもの（`DEBUG` は `INFO` の分も、`TRACE` は両方の分も含む）：
+
+- `INFO`：利用者が呼んだ公開API（`Solution`・`Project`・設定・`TemplateTools`・`Environment`）の開始・終了と所要時間、実行したコマンド（CMake・CTest・MSBuild・Ninja・git・vswhere・vcvarsall・作ったプログラム）と終了コード、書いた・消した・移動したファイル、トランザクションの開始・確定・巻き戻し。失敗したコマンドは `WARNING`、利用者へ届く例外は `ERROR`（トレースバック付き）。
+- `DEBUG`：公開APIの引数と戻り値、CppBuildの中から呼ばれた公開API（`(in #3)` のように呼び出し元の番号付き）、コマンドの出力全部・作業ディレクトリ・このプロセスと違う環境変数、構成を省いた・省かなかった理由、ロックの取得と解放、イベントの通知とコールバックの例外、読んだJSONのパス。
+- `TRACE`：コマンドの環境変数すべて、書いたファイルと読んだJSONの中身。
+
+各行の `#12` は公開APIの呼び出しの番号で、その呼び出しの中で起きたことに同じ番号が付く。名前に `TOKEN`・`SECRET`・`PASSWORD`・`CREDENTIAL`・`API_KEY`・`PRIVATE_KEY`・`AUTH` を含む環境変数の値と、URLの中のパスワードは `***` に置き換える。それ以外（パス、ソースの中身を含むコマンドの出力など）はそのまま書くので、ログを人に渡すときは中身を確認する。
+
+コードを変えずに有効にするには、`cppbuild` を読み込む前に環境変数を設定する：
+
+```powershell
+$env:CPPBUILD_LOG = "TRACE"            # 1/true/on はDEBUG、0/false/off は無効
+$env:CPPBUILD_LOG_FILE = "cppbuild.log" # なければ標準エラー
+$env:CPPBUILD_LOG_FORMAT = "json"       # 省略時 text
+python my_script.py
+```
+
+ログはPython標準の `logging` のロガー `cppbuild`（子に `cppbuild.api`・`cppbuild.process`・`cppbuild.files`・`cppbuild.storage`・`cppbuild.engine`・`cppbuild.events`・`cppbuild.transactions`）へ送る。`TRACE` の値は `cppbuild.LOG_TRACE`（5）。利用側のプログラムが自分でハンドラーを付けてもよい。`configure_logging` はCppBuildが付けたハンドラーだけを入れ替え、無効にするとロガーのレベルを未設定へ戻す（その場合、利用側のloggingの設定に従う）。
+
+- `TRACE` は大きくなる（実測：Project1つの最初のビルドで `DEBUG` 約22KB、`TRACE` 約137KB）。通常の調査は `DEBUG` で足りる。
+- `run(wait=False)` のように別スレッドで動くコマンドは、呼び出し番号が付かず `-` になる（スレッド名で区別する）。
+
 ## Pythonからの利用
 
 ```python

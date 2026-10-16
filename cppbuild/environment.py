@@ -5,7 +5,7 @@ import re
 import shutil
 import tempfile
 
-from . import engine, tooling, generators
+from . import engine, tooling, generators, logs
 from .models import CMakeSettings, ProjectType, SettingsError, SolutionBuildSettings, ToolSettings
 
 
@@ -53,6 +53,7 @@ class GeneratorInfo:
     supported: bool
 
 
+@logs.api
 class Environment:
     @staticmethod
     def generators(tools=None):
