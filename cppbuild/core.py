@@ -3,7 +3,7 @@ from copy import deepcopy
 from contextlib import ExitStack
 from dataclasses import asdict
 import hashlib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import uuid
 
@@ -14,7 +14,7 @@ from .models import (
     AlreadyRegisteredError, InvalidValueError, NotRegisteredError, ARCHITECTURES, CONFIGURATIONS, CPP_STANDARDS,
     MSVC_RUNTIMES, SWITCHABLE_TYPES,
 )
-from . import storage
+from . import storage, paths
 from . import dependencies as dependency_data
 from .events import Dispatcher, operation
 from . import tooling, generators, logs
@@ -200,12 +200,13 @@ class _Settings:
 class ProjectSettings(_Settings):
     def __init__(self, owner):
         self.owner = owner
-        self.path = owner.root / ".cppbuild" / "project.json"
+        # In the Solution's .cppbuild; the Project's directory holds only its own files.
+        self.path = owner.solution.config_directory / "projects" / owner.name / "project.json"
         self._revision = {}
 
     @staticmethod
     def _complete_types(values, initial_type=None):
-        """Initialize new/legacy settings; ordinary saves keep the complete family."""
+        """Initialize new settings; ordinary saves keep the complete family."""
         if not isinstance(values.types, dict) or not values.types:
             raise SettingsError("At least one project type is required")
         if initial_type is not None:
@@ -217,14 +218,13 @@ class ProjectSettings(_Settings):
                 if kind in LIBRARY_TYPES:
                     values.types.setdefault(kind, TypeSettingsData())
 
-    def _validate(self, values, *, legacy=False):
+    def _validate(self, values):
         if not isinstance(values, ProjectSettingsData):
             raise SettingsError("Expected ProjectSettingsData")
         if values.name != self.owner.name:
             raise SettingsError("Project renaming is not implemented")
         _name(values.name)
-        if not (legacy and values.guid is None):
-            dependency_data.guid(values.guid)
+        dependency_data.guid(values.guid)
         if not isinstance(values.types, dict) or not values.types:
             raise SettingsError("At least one project type is required")
         for kind, data in values.types.items():
@@ -247,7 +247,7 @@ class ProjectSettings(_Settings):
         for key, dependency in values.dependencies.items():
             if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{32}", key):
                 raise SettingsError("Expected dependency id -> Dependency")
-            dependency_data.validate(self.owner, dependency, legacy=legacy)
+            dependency_data.validate(self.owner, dependency)
         _strings(values.project_headers)
         _strings(values.system_headers)
         for header in values.project_headers:
@@ -278,25 +278,19 @@ class ProjectSettings(_Settings):
         for path in values.output_files:
             _cmake_text(path, "An output file")
             resolved = storage.contained(self.owner.root, path)
-            if resolved == self.owner.root or resolved.is_relative_to(self.path.parent):
+            if resolved == self.owner.root or paths.in_management(resolved):
                 raise SettingsError(f"Output files are files or directories inside the Project: {path}")
         if len(set(values.output_files)) != len(values.output_files):
             raise SettingsError("Duplicate output file")
         _strings(values.source_directories)
         for path in values.source_directories:
             resolved = storage.contained(self.owner.root, path)
-            if resolved.is_relative_to(self.path.parent):
+            if paths.in_management(resolved):
                 raise SettingsError("Management files cannot be source directories")
 
     def _read(self):
-        raw, version = storage.manifest(self.path, "project", with_version=True)
-        raw.setdefault("dependencies", {})
-        raw.setdefault("project_headers", [])
-        raw.setdefault("system_headers", [])
-        raw.setdefault("guid", None)
-        if version < 4:
-            raw.setdefault("initial_type", None)
-        # Written only when enabled, so existing files and older readers are unaffected otherwise.
+        raw = storage.manifest(self.path, "project", root=self.owner.root)
+        # Written only when they differ from the default, so the files stay short.
         export_all = raw.pop("windows_export_all_symbols", False)
         entry_point = raw.pop("entry_point", None)
         gui = raw.pop("gui", False)
@@ -316,48 +310,33 @@ class ProjectSettings(_Settings):
         if not isinstance(raw["types"], dict):
             raise SettingsError("types must be an object")
         types, revisions = {}, {self.path: storage.digest(self.path)}
-        for key, relative in raw["types"].items():
+        for key, filename in raw["types"].items():
             try:
-                kind = ProjectType.INTERFACE_LIBRARY if key == "header_only" and version < 4 else ProjectType(key)
+                kind = ProjectType(key)
             except ValueError as exc:
                 raise SettingsError(f"Unsupported project type: {key}") from exc
-            if kind in types:
-                raise SettingsError("Duplicate interface library type")
-            path = storage.contained(self.path.parent / "types", relative)
+            path = storage.contained(self.path.parent / "types", filename)
             data = storage.manifest(path, key, root=self.owner.root)
-            data.setdefault("public_definitions", [])
-            data.setdefault("include_directories", ["include"])
             storage.object_fields(data, {"compile_definitions", "public_definitions", "include_directories"})
             types[kind] = TypeSettingsData(**data)
             revisions[path] = storage.digest(path)
-        dependencies = {}
         if not isinstance(raw["dependencies"], dict):
             raise SettingsError("dependencies must be a mapping")
-        for key, data in raw["dependencies"].items():
-            dependencies[key] = dependency_data.decode(data, legacy=version < 3, legacy_types=version < 4)
+        dependencies = {key: dependency_data.decode(data) for key, data in raw["dependencies"].items()}
         try:
-            default = raw["initial_type"]
-            default = (ProjectType.INTERFACE_LIBRARY if default == "header_only" and version < 4
-                       else ProjectType(default) if default is not None else None)
+            initial = ProjectType(raw["initial_type"])
         except (TypeError, ValueError) as exc:
             raise SettingsError("Unsupported initial Project type") from exc
-        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], default,
+        values = ProjectSettingsData(raw["name"], types, raw["source_directories"], dependencies, raw["project_headers"], raw["system_headers"], raw["guid"], initial,
                                     export_all, entry_point, gui, system_libraries, compile_options, link_options,
                                     conditional_definitions, warning_level, warnings_as_errors, BuildEvents(**events),
                                     output_files)
-        if version < 4:
-            self._complete_types(values)
-        self._validate(values, legacy=version < 3)
+        self._validate(values)
         return values, revisions
 
     def reload(self):
         self.owner._check_active()
         values, revisions = self._read()
-        legacy_paths = any(storage.needs_migration(p) for p in revisions)
-        legacy_links = any(isinstance(d, dependency_data.LegacyDependency) for d in values.dependencies.values())
-        if values.guid is None or legacy_paths or legacy_links:
-            self.owner.solution.settings.reload()
-            return
         if hasattr(self, "_data") and self._data != values:
             from .information import invalidate
             invalidate(self.owner)
@@ -374,12 +353,9 @@ class ProjectSettings(_Settings):
 
     def _documents(self, values):
         documents, refs = {}, {}
-        # GUID-only initialization of an old external Solution must not recurse
-        # through its legacy links. Keep those documents in v2 until full reload.
-        version = 2 if any(isinstance(d, dependency_data.LegacyDependency)
-                           for d in values.dependencies.values()) else storage.CURRENT_SCHEMA
+        root = self.owner.root
         for kind, data in values.types.items():
-            content = storage.document(self.path.parent / "types" / "settings.json", kind.value, asdict(data), version=version)
+            content = storage.document(self.path.parent / "types" / "settings.json", kind.value, asdict(data), root=root)
             filename = f"{kind.value}-{hashlib.sha256(content).hexdigest()}.json"
             path = self.path.parent / "types" / filename
             refs[kind.value] = filename
@@ -408,13 +384,12 @@ class ProjectSettings(_Settings):
             payload["build_events"] = events
         if values.output_files:
             payload["output_files"] = values.output_files
-        documents[self.path] = storage.document(self.path, "project", payload, version=version)
+        documents[self.path] = storage.document(self.path, "project", payload, root=root)
         return documents
 
     def _publish(self, values):
-        from .paths import project_values, rebase
         values = deepcopy(values)
-        project_values(values, lambda value: rebase(value, self.owner.root, self.owner.root))
+        paths.project_values(values, lambda value: paths.rebase(value, self.owner.root, self.owner.root))
         documents = self._documents(values)
         for path, content in documents.items():
             storage.atomic_write(path, content)
@@ -473,8 +448,8 @@ class ProjectSettings(_Settings):
         from .references import link
         created = []
         try:
-            name, record, config = prepare_link(self.owner.solution, url, revision, solution_path, created)
-            report = link(self, config, link_type, git_source=(name, record))
+            name, record, config, place = prepare_link(self.owner.solution, url, revision, solution_path, created)
+            report = link(self, config, link_type, git_source=(name, record), place=place)
         except BaseException:
             discard(created)
             raise
@@ -578,40 +553,43 @@ class ProjectSettings(_Settings):
 class SolutionSettings(_Settings):
     def __init__(self, owner):
         self.owner = owner
-        # Keep the existing entry name until the explicit solution.json proposal is resolved.
-        self.path = owner.root / ".cppbuild" / "project.json"
+        # The Solution's own manifest; its Projects' are below projects/.
+        self.path = owner.config_directory / "project.json"
         self._revision = {}
 
-    def _validate(self, values, *, legacy=False):
+    def _validate(self, values, root=None):
+        """root: the base directory the values are relative to (default: the Solution's)."""
         if not isinstance(values, SolutionSettingsData):
             raise SettingsError("Expected SolutionSettingsData")
+        root = self.owner.root if root is None else root
         _name(values.name)
         from .references import validate as validate_references
-        validate_references(values, legacy=legacy)
+        validate_references(values)
         if not isinstance(values.projects, dict):
             raise SettingsError("projects must be a mapping")
         from .solution_folders import validate
         validate(values.solution_folders, values.projects)
-        roots = set()
+        names = set()
         for name, relative in values.projects.items():
             _name(name)
-            root = storage.contained(self.owner.root, relative)
-            if root == self.owner.root or root.is_relative_to(self.path.parent) or root in roots:
-                raise SettingsError("Project roots must be distinct subdirectories")
-            if any(root.is_relative_to(r) or r.is_relative_to(root) for r in roots):
-                raise SettingsError("Nested project roots are not supported yet")
-            roots.add(root)
+            # Their settings directories (projects/<name>) must differ on case-insensitive file systems.
+            if name.casefold() in names:
+                raise SettingsError(f"Project names must differ in more than letter case: {name}")
+            names.add(name.casefold())
+            directory = paths.resolve(root, relative)
+            if paths.in_management(directory):
+                raise SettingsError(f"A Project directory cannot be inside a .cppbuild directory: {relative}")
+            paths.relative(self.path.parent, directory)
         if values.main_project is not None and (not isinstance(values.main_project, str) or values.main_project not in values.projects):
             raise SettingsError("main_project must refer to a member")
         _strings(values.dependency_directories)
-        seen = set()
+        seen = []
         for directory in values.dependency_directories:
-            path = storage.contained(self.owner.root, directory)
-            if path == self.owner.root or path.is_relative_to(self.path.parent) or path in seen:
-                raise SettingsError("Dependency directories must be distinct subdirectories of the Solution")
-            if any(path.is_relative_to(r) or r.is_relative_to(path) for r in roots):
-                raise SettingsError("Dependency directories cannot overlap member Projects")
-            seen.add(path)
+            path = paths.resolve(root, directory)
+            if paths.in_management(path) or any(paths.key(path) == paths.key(s) for s in seen):
+                raise SettingsError("Dependency directories must be distinct and outside .cppbuild directories")
+            paths.relative(self.path.parent, path)
+            seen.append(path)
         from .git_sources import validate as validate_git_sources
         validate_git_sources(values)
         if values.msvc_runtime not in MSVC_RUNTIMES:
@@ -626,8 +604,24 @@ class SolutionSettings(_Settings):
                 raise SettingsError("Expected a material path")
             material_path(self.owner, filename)
 
+    def _base(self, raw):
+        """The base directory recorded in the manifest data (relative to .cppbuild; default its parent)."""
+        value = raw.pop("base_directory", "..")
+        if not isinstance(value, str) or not value or PureWindowsPath(value).drive or PureWindowsPath(value).root:
+            raise SettingsError("base_directory must be a path relative to the .cppbuild directory")
+        return paths.resolve(self.path.parent, value)
+
     def _read(self):
-        raw, version = storage.manifest(self.path, "solution", with_version=True)
+        return self._load()[0]
+
+    def _load(self):
+        """(values, base directory) of the saved manifest."""
+        raw = storage.envelope(self.path, "solution")
+        if not isinstance(raw, dict):
+            raise SettingsError("Expected settings object")
+        raw = dict(raw)
+        root = self._base(raw)
+        raw = paths.decode(self.path, "solution", raw, root)
         raw.setdefault("file_templates", {})
         raw.setdefault("solution_folders", None)
         raw.setdefault("references", {})
@@ -654,25 +648,28 @@ class SolutionSettings(_Settings):
             storage.object_fields(folder, {"projects", "linked_projects", "project_folders", "external"})
             raw["solution_folders"] = SolutionFolderSettings(**folder)
         values = SolutionSettingsData(**raw)
-        self._validate(values, legacy=version < 3)
-        return values
+        self._validate(values, root)
+        return values, root
 
     def reload(self):
-        self._reload(migrate=True)
-
-    def _reload(self, *, migrate):
         revision = storage.digest(self.path)
-        values = self._read()
+        values, root = self._load()
         # Read/validate every child before replacing any live state.
-        projects, loaded = {}, {}
-        for name, relative in values.projects.items():
-            root = storage.contained(self.owner.root, relative)
-            previous = self.owner._projects.get(name)
-            project = previous if previous and previous.root == root else Project(self.owner, root, name)
-            loaded[name] = project.settings._read()
-            projects[name] = project
-        from .references import load
-        loaded, revision = load(self.owner, values, projects, loaded, revision, migrate=migrate)
+        previous_root = self.owner.root
+        self.owner.root = root
+        try:
+            projects, loaded = {}, {}
+            for name, relative in values.projects.items():
+                directory = paths.resolve(root, relative)
+                previous = self.owner._projects.get(name)
+                project = previous if previous and previous.root == directory else Project(self.owner, directory, name)
+                loaded[name] = project.settings._read()
+                projects[name] = project
+            from .references import check_loaded
+            check_loaded(values, {project: loaded[name][0] for name, project in projects.items()})
+        except BaseException:
+            self.owner.root = previous_root
+            raise
         for name, project in projects.items():
             if hasattr(project.settings, "_data") and project.settings._data != loaded[name][0]:
                 from .information import invalidate
@@ -689,6 +686,8 @@ class SolutionSettings(_Settings):
             raise SettingsError("Use add_project/remove_project/move_project to change membership")
         if values.references != self._data.references:
             raise SettingsError("References are managed by Project link/unlink operations")
+        from .references import check_layout
+        check_layout(self.owner, values, {p: p.settings._data for p in self.owner.projects()})
         with storage.write_lock(self.path.parent):
             self._assert_unchanged()
             return self._publish(values)
@@ -699,10 +698,11 @@ class SolutionSettings(_Settings):
         self._revision = {self.path: storage.digest(self.path)}
         return ChangeReport((str(self.path),))
 
-    def _document(self, values):
+    def _document(self, values, *, base=None):
+        """The manifest bytes; base: a new base directory to record (default: the current one)."""
         data = asdict(values)
+        # Written only when used, so the files stay short.
         if not data["dependency_directories"]:
-            # Written only when used, so existing files keep their bytes.
             del data["dependency_directories"]
         if not data["git_sources"]:
             del data["git_sources"]
@@ -710,16 +710,19 @@ class SolutionSettings(_Settings):
             del data["msvc_runtime"]
         if data["solution_folders"] is not None and data["solution_folders"]["external"] == "External":
             del data["solution_folders"]["external"]
-        return storage.document(self.path, "solution", data)
+        payload = paths.encode(self.path, "solution", data, self.owner.root)
+        relative = paths.relative(self.path.parent, self.owner.root if base is None else base)
+        if relative != "..":
+            payload["base_directory"] = relative
+        return storage.encoded({"schema_version": storage.CURRENT_SCHEMA, "kind": "solution", "data": payload})
 
     def set_file_template(self, name, template_file):
-        from .templates import material_path
+        """Register a file below .cppbuild/templates (template_file: relative to the base directory, or absolute)."""
+        from .templates import material_name
         _name(name)
-        path = material_path(self.owner, template_file)
-        if not path.is_file():
-            raise FileNotFoundError(path)
+        filename = material_name(self.owner, template_file)
         values = self.get()
-        values.file_templates[name] = path.relative_to(self.owner.root).as_posix()
+        values.file_templates[name] = filename
         return self.save(values)
 
     def file_templates(self):
@@ -874,8 +877,11 @@ class Project:
 
 @logs.api
 class Solution:
-    def __init__(self, root):
-        self.root = Path(root).resolve()
+    def __init__(self, config_directory, root=None):
+        # config_directory: the .cppbuild directory holding every management and generated file.
+        # root: the base directory, the reference for paths given to the API (default: the parent).
+        self.config_directory = Path(config_directory).resolve()
+        self.root = Path(root).resolve() if root is not None else self.config_directory.parent
         self._projects = {}
         self.settings = SolutionSettings(self)
         self._build_settings = SolutionBuildSettings()
@@ -917,13 +923,27 @@ class Solution:
         pass
 
     @classmethod
-    def create(cls, destination_directory, solution_name, *, template=None):
+    def create(cls, destination_directory, solution_name, *, template=None, base_directory=None):
+        """A new Solution whose .cppbuild is created in destination_directory.
+
+        base_directory: the reference for paths given to the API (relative to destination_directory,
+        or absolute; default destination_directory). Projects may also lie outside it.
+        template: a Solution template's .cppbuild; its base directory tree is copied to
+        destination_directory, keeping the template's place of .cppbuild in it.
+        """
         if template is not None:
+            if base_directory is not None:
+                raise SettingsError("A Solution from a template keeps the template's base directory")
             from .templates import instantiate
             return instantiate(template, destination_directory, solution_name)
         _name(solution_name)
-        instance = cls(destination_directory)
-        with storage.write_lock(instance.settings.path.parent):
+        destination = Path(destination_directory).resolve()
+        root = destination if base_directory is None else paths.resolve(destination, str(base_directory))
+        if paths.in_management(destination) or paths.in_management(root):
+            raise SettingsError("A Solution cannot be created inside a .cppbuild directory")
+        instance = cls(destination / paths.MANAGEMENT, root)
+        paths.relative(instance.config_directory, root)
+        with storage.write_lock(instance.config_directory):
             if instance.settings.path.exists():
                 raise FileExistsError(instance.settings.path)
             instance.settings._publish(SolutionSettingsData(solution_name))
@@ -932,11 +952,33 @@ class Solution:
     @classmethod
     def open(cls, config_directory):
         config = Path(config_directory).resolve()
-        if config.name != ".cppbuild":
+        if config.name != paths.MANAGEMENT:
             raise SettingsError("Pass the Solution .cppbuild directory")
-        instance = cls(config.parent)
+        instance = cls(config)
         instance.settings.reload()
         return instance
+
+    def set_base_directory(self, directory):
+        """Change the base directory (relative to the current one, or absolute). Nothing moves:
+        saved paths are relative to .cppbuild, only the API's reference changes."""
+        root = paths.resolve(self.root, str(directory))
+        if paths.in_management(root):
+            raise SettingsError("The base directory cannot be inside a .cppbuild directory")
+        paths.relative(self.config_directory, root)
+        with storage.write_lock(self.config_directory):
+            self.settings._assert_unchanged()
+            storage.atomic_write(self.settings.path, self.settings._document(self.settings._data, base=root))
+            self.settings.reload()
+        return ChangeReport((str(self.settings.path),))
+
+    def move_config(self, destination_directory, *, keep_base=True):
+        """Move .cppbuild into destination_directory (relative to the base directory, or absolute),
+        keeping where every recorded path points. keep_base False moves the base directory along
+        (it keeps its place relative to .cppbuild). Build trees below .cppbuild/output stay behind."""
+        if storage.journal() is not None:
+            raise SettingsError("move_config moves files, which a transaction cannot undo")
+        from .relocation import move_config
+        return move_config(self, destination_directory, keep_base=keep_base)
 
     def get_project(self, name):
         if name not in self._projects:
@@ -979,14 +1021,16 @@ class Solution:
         return check_owner(self)
 
     def add_project(self, directory, name, project_type, settings=None):
+        """Register a Project whose files are in directory (relative to the base directory, or
+        absolute; anywhere on the drive of .cppbuild). Nothing is written there."""
         _name(name)
         if not isinstance(project_type, ProjectType):
             raise SettingsError("Expected ProjectType")
-        root = storage.contained(self.root, str(directory))
+        root = paths.resolve(self.root, str(directory))
         values = self.settings.get()
         if name in values.projects:
             raise AlreadyRegisteredError(f"Duplicate Project: {name}", kind="project", name=name)
-        values.projects[name] = root.relative_to(self.root).as_posix()
+        values.projects[name] = paths.relative(self.root, root)
         if len(values.projects) == 1:
             values.main_project = name
         self.settings._validate(values)
@@ -999,6 +1043,8 @@ class Solution:
         data.guid = str(uuid.uuid4())
         if project_type not in data.types:
             raise SettingsError("The requested type must exist in settings.types")
+        from .references import check_layout
+        check_layout(self, values, {**{p: p.settings._data for p in self.projects()}, project: data})
         with storage.write_lock(self.settings.path.parent), storage.write_lock(project.settings.path.parent):
             self.settings._assert_unchanged()
             if project.settings.path.exists():
@@ -1035,9 +1081,20 @@ class Solution:
                 locks.enter_context(storage.write_lock(project.settings.path.parent))
                 project.settings._assert_unchanged()
             self.settings._assert_unchanged()
+            removed = self.get_project(name)
             report = self.settings._publish(values)
             del self._projects[name]
-        return report
+            # Its settings belong to this Solution; the Project's own files are kept.
+            for path in [removed.settings.path, *(p for p in removed.settings._revision if p != removed.settings.path)]:
+                if path.is_file():
+                    storage.remove_file(path)
+        # Once the locks are released, the emptied directories go too.
+        for directory in (removed.settings.path.parent / "types", removed.settings.path.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        return ChangeReport((*report.changed_paths, str(removed.settings.path)))
 
     def git_sources(self):
         """Every git source: this Solution's records, then the ones linked Solutions record (GitSourceStatus)."""
@@ -1071,14 +1128,16 @@ class Solution:
         """Clone every missing git source at its recorded commit, as the generated CMake does."""
         from .git_sources import fetch
         self.settings.reload()
-        with storage.operation_lock(self.root):
+        with storage.operation_lock(self.config_directory):
             return fetch(self)
 
-    def move_project(self, name, destination, *, auto_update=True):
-        if storage.journal() is not None:
+    def move_project(self, name, destination, *, auto_update=True, move_files=True):
+        """Move a Project's directory to destination (relative to the base directory, or absolute).
+        move_files False only records the new place, for files already moved (e.g. with git mv)."""
+        if storage.journal() is not None and move_files:
             raise SettingsError("move_project moves the Project's files, which a transaction cannot undo")
         from .relocation import move_project
-        return move_project(self, name, destination, auto_update=auto_update)
+        return move_project(self, name, destination, auto_update=auto_update, move_files=move_files)
 
     def set_build_settings(self, values):
         if not isinstance(values, SolutionBuildSettings):

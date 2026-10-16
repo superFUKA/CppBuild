@@ -4,6 +4,31 @@
 
 更新日：2026-09-17。設計資料。実装・自動テスト・CMake実ビルド検証は未着手。
 
+## 2026-10-17変更：Solutionにつき1つの.cppbuildと自由な配置
+
+依頼（2026-10-17）：`.cppbuild`をSolutionにつき1つにし、`.cppbuild`もソースもどこに置けるようにする。判断と破綻チェックは[配置変更の設計](SOLUTION_LAYOUT_PLAN.md)、使い方は[利用手順](USAGE.md)の「Solutionの配置」。互換性は考慮しない（ユーザー指示）。旧形式（schema 4以前）は読まず、移行もしない。
+
+| 入口 | 内容 |
+| --- | --- |
+| `Solution.create(destination_directory, solution_name, *, template=None, base_directory=None)` | `destination_directory/.cppbuild`を作る。`base_directory`は基準ディレクトリ（`destination_directory`からの相対か絶対、既定は`destination_directory`）。テンプレートからの作成では指定できない |
+| `Solution.open(config_directory)` | 変更なし |
+| `solution.root` / `solution.config_directory` | 基準ディレクトリ（APIの相対パスの基準）／`.cppbuild` |
+| `solution.set_base_directory(directory)` | 基準ディレクトリだけを変える。何も動かさない |
+| `solution.move_config(destination_directory, *, keep_base=True)` | `.cppbuild`の管理ファイルを移し、記録したパスを書き直す。ビルドツリーとロックは残る。`ChangeReport` |
+| `solution.add_project(directory, name, project_type, settings=None)` | 基準ディレクトリからの相対か絶対。どこでもよく、ディレクトリには何も書かない（存在しなくてもよい） |
+| `solution.remove_project(name)` | Projectの設定（`.cppbuild/projects/<名前>/`）を削除する。ソースは残す |
+| `solution.move_project(name, destination, *, auto_update=True, move_files=True)` | `move_files=False`で記録だけを付け替える |
+| `SolutionInfo.config_directory` | 追加 |
+| `file_templates` の値 | `.cppbuild/templates/`からの名前 |
+| `ProjectBuildSettings.artifact_directory` の相対パス | Solutionの`.cppbuild`基準（以前はProjectの`.cppbuild`基準） |
+
+- 保存：Solutionの`project.json`は`.cppbuild`基準、Projectの`project.json`（`.cppbuild/projects/<名前>/`）と種類別設定はProjectのディレクトリ基準。`base_directory`は既定以外のときだけ書く。schema_version=5。
+- 生成：すべて`.cppbuild`の中（入口・`CppBuildTopLevel.cmake`・`projects/<名前>/CMakeLists.txt`）。`CPPBUILD_FORMAT`=2。
+- 配置の規則：Projectのディレクトリは`.cppbuild`の中に置けない。ソースディレクトリの重なり（同じSolutionのProjectどうし、依存探索ディレクトリとの間）はエラー。別のSolutionと同じディレクトリは使えるが、1回のビルドに両方が入るとエラー。Project名は大文字小文字を区別せずに重複を検査する。ドライブをまたぐパスはエラー。
+- 依存探索：探索ディレクトリの下を再帰的に探す。見つけたSolution自身の依存探索ディレクトリの中は除く。
+- `link_git`：リンク先SolutionのProjectがリポジトリの外にあればエラー。
+- 以下の各節の「各Projectの`.cppbuild`」「Solutionルート」「Projectルート」等の記述は、この節で置き換える（Solutionルート→基準ディレクトリ、Projectルート→Projectのディレクトリ）。
+
 ## 2026-10-16追加：詳細ログ
 
 依頼（2026-10-16）：AIが読んで問題を解決できるよう、さまざまな操作で詳細なログを残す設定。有効・無効とレベルを設定できること。使い方は[利用手順](USAGE.md)の「詳細ログ」。

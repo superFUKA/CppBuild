@@ -1,11 +1,13 @@
 """CMake files for a Solution that configure and build without CppBuild.
 
-Each Solution gets a CMakeLists.txt (its member Projects, independent of who
-includes it) and CppBuildTopLevel.cmake (build defaults and the linked
-Solutions resolved with it as the top level). Each Project gets a
-CMakeLists.txt in its directory. Paths are relative, the content does not
-depend on the generator, compiler, architecture or other non-saved settings,
-and the same input always produces the same bytes.
+Every file is in the Solution's .cppbuild directory, beside the management files:
+CMakeLists.txt (its member Projects, independent of who includes it),
+CppBuildTopLevel.cmake (build defaults and the linked Solutions resolved with it as
+the top level) and projects/<Project>/CMakeLists.txt, which finds the Project's
+directory by a relative path. Nothing is written in the Projects' directories.
+Paths are relative, the content does not depend on the generator, compiler,
+architecture or other non-saved settings, and the same input always produces the
+same bytes.
 
 Non-saved settings reach CMake as cache variables (see workspace.cache_script).
 """
@@ -32,7 +34,7 @@ WINDOWS_COMPILED_SUFFIXES = {".rc", ".manifest", ".def"}
 SCAN_EXCLUDED = (".cppbuild", ".git", "build", "__pycache__", ".cache", ".venv")
 # The conventions between generated files (CPPBUILD_REQUEST_*, aliases, ...). A linked
 # Solution's files must use the same one, e.g. when they come from another repository.
-FORMAT = 1
+FORMAT = 2
 # Same rules as git_sources.fetch(): clone a missing place at the recorded commit through a
 # temporary directory; never change an existing place, only compare it with the record.
 GIT_SOURCE_FUNCTION = r'''function(_cppbuild_git_source directory url revision solution)
@@ -95,7 +97,7 @@ def _collect_function():
   set(_files)
   set(_pending)
   foreach(_root IN LISTS ARGN)
-    set(_root "${{CMAKE_CURRENT_SOURCE_DIR}}/${{_root}}")
+    set(_root "${{_cppbuild_project_dir}}/${{_root}}")
     # Also notices a source directory created later.
     file(GLOB _found CONFIGURE_DEPENDS LIST_DIRECTORIES true "${{_root}}")
     if(IS_DIRECTORY "${{_root}}" AND NOT EXISTS "${{_root}}/{marker}")
@@ -272,11 +274,11 @@ def _relative(base, target, what):
 
 
 def _source_path(base, target, what):
-    """A path below ${CMAKE_CURRENT_SOURCE_DIR} for commands that need a full path."""
+    """A full path from the Project's directory (base) for the generated Project file."""
     value = _relative(base, target, what)
     if any(c in value for c in '"\\$@;'):
         raise SettingsError(f"{what} contains characters CMake cannot quote here: {value}")
-    return '"${CMAKE_CURRENT_SOURCE_DIR}/' + value + '"'
+    return '"${_cppbuild_project_dir}' + ("" if value == "." else "/" + value) + '"'
 
 
 def _quotable(value):
@@ -313,7 +315,7 @@ def _member_folder(solution, project):
 def solution_entry(solution):
     data = solution.settings._data
     requests = internal_requests(solution)
-    lines = _header(".cppbuild/project.json", f"Solution {data.name}: configure with cmake -S <this directory> -B <build directory>.")
+    lines = _header("project.json", f"Solution {data.name}: configure with cmake -S <this .cppbuild directory> -B <build directory>.")
     lines += ["cmake_minimum_required(VERSION 3.24)", f"project({data.name} LANGUAGES C CXX)",
               f"set_property(DIRECTORY PROPERTY CPPBUILD_FORMAT {FORMAT})  # checked by the including Solution", "",
               "# Every member is added, with this Solution's linked Solutions, unless another CppBuild",
@@ -349,7 +351,8 @@ def solution_entry(solution):
             if folder is not None:
                 lines.append(f"    set(CMAKE_FOLDER {arg(folder)})")
             lines.append("  endif()")
-        lines += [f"  add_subdirectory({arg(_relative(solution.root, project.root, 'A Project directory'))})", "endif()"]
+        # The build tree keeps the short <Project> directory: Windows path limits are near (MSB6003).
+        lines += [f"  add_subdirectory({arg(project_directory(project))} {arg(project.name)})", "endif()"]
     lines += ["", "if(CPPBUILD_WHOLE_SOLUTION)",
               "  # Every target of this build exists now, linked Solutions included.",
               "  _cppbuild_module_scanning()",
@@ -383,7 +386,7 @@ def startup_candidates(solution):
 def top_level(plan):
     solution = plan.solution
     data = solution.settings._data
-    lines = _header(".cppbuild/project.json",
+    lines = _header("project.json",
                     f"Included by CMakeLists.txt when {data.name} is built as a whole: as the top-level project, "
                     "or added by a project that does not use CppBuild.")
     lines += ["if(PROJECT_IS_TOP_LEVEL)",
@@ -424,7 +427,7 @@ def top_level(plan):
                   *GIT_SOURCE_FUNCTION.splitlines(),
                   "set_property(GLOBAL PROPERTY CPPBUILD_GIT_MISSING)"]
         for status in sources:
-            directory = _relative(solution.root, status.directory, "A git source place")
+            directory = _relative(solution.config_directory, status.directory, "A git source place")
             lines.append(f"_cppbuild_git_source({arg(directory)} {arg(status.url)} {status.revision} {arg(status.path)})")
         lines += ["get_property(_cppbuild_missing GLOBAL PROPERTY CPPBUILD_GIT_MISSING)",
                   "if(_cppbuild_missing)",
@@ -477,7 +480,7 @@ def _external_setup(project, key, value):
     if isinstance(value, CMakeSource):
         directory = path(project, value.directory)
         return ([f"if(NOT TARGET {value.target})",
-                 f"  add_subdirectory({arg(_relative(root, directory, 'A CMake source directory'))} {arg('_external/' + key)} EXCLUDE_FROM_ALL)",
+                 f"  add_subdirectory({_source_path(root, directory, 'A CMake source directory')} {arg('_external/' + key)} EXCLUDE_FROM_ALL)",
                  "endif()"], value.target)
     if isinstance(value, ImportedLibrary):
         name = "external_" + key
@@ -542,7 +545,7 @@ def _target_body(project, kind, target, items, indent):
     scope = "INTERFACE" if interface else "PRIVATE" if kind in {ProjectType.EXECUTABLE, ProjectType.TEST} else "PUBLIC"
     lines = []
     if settings.include_directories:
-        directories = " ".join(arg(_relative(project.root, storage.contained(project.root, d), "An include directory"))
+        directories = " ".join(_source_path(project.root, storage.contained(project.root, d), "An include directory")
                                for d in settings.include_directories)
         lines.append(f"target_include_directories({target} {scope} {directories})")
     definitions = []
@@ -651,7 +654,7 @@ def _options(project, kind, target):
         if commands:
             lines.append(f"add_custom_command(TARGET {target} {stage}")
             lines += ["  COMMAND " + " ".join(arg(a) for a in command) for command in commands]
-            lines.append('  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" VERBATIM)')
+            lines.append('  WORKING_DIRECTORY "${_cppbuild_project_dir}" VERBATIM)')
     if data.output_files and kind in OUTPUT_FILE_KINDS:
         files = target + "_files"
         items = " ".join(arg(_relative(project.root, storage.contained(project.root, f), "An output file"))
@@ -659,7 +662,7 @@ def _options(project, kind, target):
         lines += ["# Copied beside the built file at every build, keeping their place in the Project.",
                   "set(_cppbuild_copy)",
                   f"foreach(_cppbuild_item IN ITEMS {items})",
-                  '  set(_cppbuild_from "${CMAKE_CURRENT_SOURCE_DIR}/${_cppbuild_item}")',
+                  '  set(_cppbuild_from "${_cppbuild_project_dir}/${_cppbuild_item}")',
                   f'  set(_cppbuild_to "$<TARGET_FILE_DIR:{target}>/${{_cppbuild_item}}")',
                   '  if(IS_DIRECTORY "${_cppbuild_from}")',
                   "    set(_cppbuild_command copy_directory)",
@@ -682,6 +685,24 @@ def check_sources(project, files):
     """Scanned files the generated CMake can collect (a CMake list cannot hold ";")."""
     for path in files:
         arg(_relative(project.root, path, "A source file"))
+
+
+def project_directory(project):
+    """The directory of a Project's generated file, relative to its Solution's .cppbuild."""
+    return "projects/" + project.name
+
+
+def entry_path(project):
+    return project.solution.config_directory / project_directory(project) / ENTRY
+
+
+def _project_directory(project):
+    """Every path of the Project file is below the Project's directory, found from this file."""
+    value = _quotable(_relative(entry_path(project).parent, project.root, "A Project directory"))
+    return ["# The Project's directory, where its sources are (the Project's paths are relative to it).",
+            # Not cmake_path(NORMALIZE): CMake 4.2.3 crashes on it with non-ASCII paths on Windows.
+            f'get_filename_component(_cppbuild_project_dir "${{CMAKE_CURRENT_SOURCE_DIR}}/{value}" ABSOLUTE)',
+            ""]
 
 
 def _sources(project):
@@ -756,7 +777,7 @@ def _modules(target, scope, indent):
              f'    message(FATAL_ERROR "{target} has C++ module interface units, which need CMake 3.28 or later")',
              "  endif()",
              f"  target_sources({target} {scope} FILE_SET cppbuild_modules TYPE CXX_MODULES",
-             '    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${_cppbuild_modules})',
+             '    BASE_DIRS "${_cppbuild_project_dir}" FILES ${_cppbuild_modules})',
              f"  set_property(GLOBAL APPEND PROPERTY CPPBUILD_MODULE_TARGETS {target})",
              "endif()"]
     return [pad + line for line in lines]
@@ -804,7 +825,7 @@ def _test_registration(project, target):
             "  if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.2)",
             '    set(_cppbuild_discovery_args DISCOVERY_EXTRA_ARGS "--gtest_output=")',
             "  endif()",
-            f'  gtest_discover_tests({target} DISCOVERY_MODE PRE_TEST WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}"',
+            f'  gtest_discover_tests({target} DISCOVERY_MODE PRE_TEST WORKING_DIRECTORY "${{_cppbuild_project_dir}}"',
             "    # Without a prefix, a test name shared by two TEST Projects takes both labels.",
             f"    TEST_PREFIX {arg(test_prefix(project))} PROPERTIES LABELS {target} ${{_cppbuild_discovery_args}})",
             "endif()"]
@@ -814,10 +835,11 @@ def project_entry(project, providers):
     data = project.settings._data
     initial = data.initial_type
     solution_name = project.solution.settings._data.name
-    lines = _header(".cppbuild/project.json",
+    lines = _header(f"projects/{project.name}/project.json",
                     f"Project {project.name} of Solution {solution_name} ({initial.value}), GUID {data.guid}. "
                     "Added by the Solution's CMakeLists.txt.")
     setup, items = _links(project, providers)
+    lines += _project_directory(project)
     lines += _sources(project)
     if setup:
         lines += [""] + setup
@@ -828,7 +850,7 @@ def project_entry(project, providers):
         lines += ["", f"add_executable({target} ${{_cppbuild_sources}})",
                   f"set_target_properties({target} PROPERTIES OUTPUT_NAME {arg(project.name)})",
                   "# Visual Studio debugs in the Project directory, where CppBuild's run and the tests start too.",
-                  f'set_target_properties({target} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}")']
+                  f'set_target_properties({target} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${{_cppbuild_project_dir}}")']
         lines += _target_body(project, initial, target, items, 0)
         lines += _modules(target, "PRIVATE", 0)
         lines += _entry_point(project, target)
@@ -848,7 +870,7 @@ def project_entry(project, providers):
     else:
         lines += [""] + _library(project, items)
     lines += ["", "if(_cppbuild_sources OR _cppbuild_modules)",
-              '  source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" PREFIX "" FILES ${_cppbuild_sources} ${_cppbuild_modules})',
+              '  source_group(TREE "${_cppbuild_project_dir}" PREFIX "" FILES ${_cppbuild_sources} ${_cppbuild_modules})',
               "endif()"]
     return "\n".join(lines) + "\n"
 

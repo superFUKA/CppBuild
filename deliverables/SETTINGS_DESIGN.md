@@ -1,5 +1,7 @@
 # 設定の受け渡し・継承・種類別設定・実行順
 
+> 2026-10-17更新：管理ファイルはSolutionの`.cppbuild`にまとめた（Projectの設定は`.cppbuild/projects/<名前>/project.json`と`types/`、Projectのディレクトリにはソースだけ）。Projectの保存パスはProjectのディレクトリ基準、`artifact_directory`の相対パスはSolutionの`.cppbuild`基準。旧形式（schema 4以前）の移行はなくなった。以下の「各Projectの`.cppbuild`」の記述は経緯の記録で、現行は[配置変更の設計](SOLUTION_LAYOUT_PLAN.md)と[利用手順](USAGE.md#solution-layout)を優先する。
+
 ## 2026-10-01追加：出力先の非保存設定
 
 > 同日更新：SolutionごとのCMakeプロジェクト化により、`ProjectBuildSettings.intermediate_directory` は廃止し、ビルドツリーは`SolutionBuildSettings.intermediate_directory`だけで決める。`ProjectBuildSettings.artifact_directory`の既定は`None`（CMakeの既定の配置）。保存しない設定はCMakeの初期キャッシュ（`cmake -C`）で渡し、生成するCMakeファイルには書かない。外部Solutionは`external_build_settings`がなければ最上位の構成・環境・C++標準・ToolSettingsを引き継ぐ。詳細は[API設計](API_DESIGN.md)冒頭。

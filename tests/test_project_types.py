@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+
+from cppbuild.cmake_files import entry_path
 from unittest.mock import patch
 
 from cppbuild import (ImportedLibrary, ProjectBuildSettings, ProjectSettingsData, ProjectType as T,
@@ -34,27 +36,6 @@ class ProjectTypeTests(unittest.TestCase):
     def success(self, report):
         self.outputs.extend(p.output for p in report.processes)
         self.assertTrue(report.success, "\n".join(p.output for p in report.processes))
-
-    def legacy(self, solution, *, version=3):
-        """Make an old single-kind manifest, including old dependency names."""
-        for project in solution.projects():
-            raw = storage.read_json(project.settings.path)
-            default = raw["data"].pop("initial_type")
-            path = project.settings.path.parent / raw["data"]["types"][default]
-            kind = storage.read_json(path)
-            old = "header_only" if default == "interface_library" else default
-            kind["kind"], kind["schema_version"] = old, version
-            storage.atomic_write(path, storage.encoded(kind))
-            raw["data"]["types"] = {old: raw["data"]["types"][default]}
-            raw["schema_version"] = version
-            for dependency in raw["data"]["dependencies"].values():
-                values = dependency["values"]
-                if values.get("project_type") == "interface_library":
-                    values["project_type"] = "header_only"
-            storage.atomic_write(project.settings.path, storage.encoded(raw))
-        raw = storage.read_json(solution.settings.path)
-        raw["schema_version"] = version
-        storage.atomic_write(solution.settings.path, storage.encoded(raw))
 
     def test_new_name_and_all_library_selections_without_registration(self):
         self.assertFalse(hasattr(T, "HEADER_ONLY"))
@@ -125,69 +106,7 @@ class ProjectTypeTests(unittest.TestCase):
         _, nodes = resolve([app])
         self.assertEqual({n.project.name: n.settings.project_type for n in nodes}["Api"], T.INTERFACE_LIBRARY)
 
-    def test_legacy_header_settings_and_dependencies_migrate_once(self):
-        provider = Solution.create(self.root / "Provider", "Provider")
-        library = provider.add_project("Api", "Api", T.INTERFACE_LIBRARY)
-        app = self.solution.add_project("App", "App", T.EXECUTABLE)
-        external = app.settings.link_solution(provider.root / ".cppbuild", T.INTERFACE_LIBRARY)
-        internal = app.settings.link_project(self.project, T.INTERFACE_LIBRARY)
-        imported = app.settings.link_imported_library(ImportedLibrary(T.INTERFACE_LIBRARY, include_directories=["include"]))
-        original_guid = library.settings.get().guid
-        self.legacy(provider)
-        self.legacy(self.solution)
-        loaded = Solution.open(self.solution.root / ".cppbuild")
-        _, nodes = resolve([loaded.get_project("App")])
-        migrated = next(n.project for n in nodes if n.project.name == "Api")
-        self.assertEqual(migrated.settings.get().guid, original_guid)
-        self.assertEqual(migrated.settings.get().initial_type, T.INTERFACE_LIBRARY)
-        dependencies = loaded.get_project("App").settings.get().dependencies
-        self.assertEqual(set(dependencies), {external.dependency_id, internal.dependency_id, imported.dependency_id})
-        self.assertTrue(all(d.project_type == T.INTERFACE_LIBRARY for d in dependencies.values()))
-        for owner in (loaded, migrated.solution):
-            for project in owner.projects():
-                raw = storage.read_json(project.settings.path)
-                self.assertEqual(raw["schema_version"], 4)
-                self.assertNotIn('"header_only"', project.settings.path.read_text(encoding="utf-8"))
-                for reference in raw["data"]["types"].values():
-                    typed = storage.read_json(project.settings.path.parent / reference)
-                    self.assertNotEqual(typed["kind"], "header_only")
-        with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Unexpected migration")):
-            loaded.settings.reload()
-            resolve([loaded.get_project("App")])
-
-    def test_v2_header_migration_and_subfolder_paths(self):
-        library = self.solution.add_project("Api", "Api", T.INTERFACE_LIBRARY)
-        self.legacy(self.solution, version=2)
-        raw = storage.read_json(library.settings.path)
-        old_path = library.settings.path.parent / raw["data"]["types"]["header_only"]
-        nested = old_path.parent / "nested" / old_path.name
-        typed = storage.read_json(old_path)
-        typed["data"]["include_directories"] = ["../../../include"]
-        storage.atomic_write(nested, storage.encoded(typed))
-        raw["data"]["types"]["header_only"] = nested.relative_to(library.settings.path.parent).as_posix()
-        storage.atomic_write(library.settings.path, storage.encoded(raw))
-        loaded = Solution.open(self.solution.root / ".cppbuild").get_project("Api")
-        self.assertEqual(loaded.settings.get().types[T.INTERFACE_LIBRARY].include_directories, ["include"])
-        self.assertEqual(loaded.settings.get().initial_type, T.INTERFACE_LIBRARY)
-
-    def test_migration_failure_restores_saved_files_and_state(self):
-        library = self.solution.add_project("Api", "Api", T.INTERFACE_LIBRARY)
-        before_data = library.settings.get()
-        self.legacy(self.solution)
-        before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
-        original = storage.atomic_write
-
-        def fail(path, content):
-            if path == library.settings.path:
-                raise OSError("migration failed")
-            return original(path, content)
-
-        with patch("cppbuild.storage.atomic_write", side_effect=fail), self.assertRaises(OSError):
-            self.solution.settings.reload()
-        self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
-        self.assertEqual(library.settings.get(), before_data)
-
-    def test_current_schema_rejects_old_name_and_duplicate_legacy_kinds(self):
+    def test_old_type_name_and_old_schemas_are_rejected(self):
         library = self.solution.add_project("Api", "Api", T.INTERFACE_LIBRARY)
         original = library.settings.path.read_bytes()
         raw = storage.read_json(library.settings.path)
@@ -196,27 +115,15 @@ class ProjectTypeTests(unittest.TestCase):
         with self.assertRaises(SettingsError):
             Solution.open(self.solution.root / ".cppbuild")
         library.settings.path.write_bytes(original)
-        self.legacy(self.solution)
-        raw = storage.read_json(library.settings.path)
-        raw["data"]["types"]["interface_library"] = raw["data"]["types"]["header_only"]
-        storage.atomic_write(library.settings.path, storage.encoded(raw))
-        with self.assertRaises(SettingsError):
-            Solution.open(self.solution.root / ".cppbuild")
-
-    def test_old_mixed_families_fail_without_rewriting(self):
-        self.legacy(self.solution)
-        raw = storage.read_json(self.project.settings.path)
-        source = self.project.settings.path.parent / raw["data"]["types"]["static_library"]
-        typed = storage.read_json(source)
-        typed["kind"] = "executable"
-        target = source.parent / "old-executable.json"
-        storage.atomic_write(target, storage.encoded(typed))
-        raw["data"]["types"]["executable"] = target.relative_to(self.project.settings.path.parent).as_posix()
-        storage.atomic_write(self.project.settings.path, storage.encoded(raw))
-        before = {p: p.read_bytes() for p in self.solution.root.rglob("*.json")}
-        with self.assertRaises(SettingsError):
-            Solution.open(self.solution.root / ".cppbuild")
-        self.assertEqual(before, {p: p.read_bytes() for p in self.solution.root.rglob("*.json")})
+        # Earlier layouts (a .cppbuild in every Project) are not read.
+        for path in (library.settings.path, self.solution.settings.path):
+            raw = storage.read_json(path)
+            raw["schema_version"] = 4
+            storage.atomic_write(path, storage.encoded(raw))
+            with self.assertRaisesRegex(SettingsError, "Unsupported schema"):
+                Solution.open(self.solution.root / ".cppbuild")
+            raw["schema_version"] = storage.CURRENT_SCHEMA
+            storage.atomic_write(path, storage.encoded(raw))
 
     def test_initial_type_survives_move_and_template(self):
         project = self.solution.add_project("Api", "Api", T.INTERFACE_LIBRARY)
@@ -231,7 +138,7 @@ class ProjectTypeTests(unittest.TestCase):
     def test_windows_export_all_symbols_is_saved_and_generated_for_shared_only(self):
         from cppbuild import workspace
         project = self.project
-        entry = project.root / "CMakeLists.txt"
+        entry = entry_path(project)
         self.assertNotIn("WINDOWS_EXPORT_ALL_SYMBOLS", workspace.plan(self.solution).documents()[entry])
         self.assertNotIn("windows_export_all_symbols", storage.read_json(project.settings.path)["data"])
         project.settings.set_windows_export_all_symbols()
@@ -314,7 +221,7 @@ int value();
         self.assertFalse(list(tree.rglob("Switch.lib")))
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
-    def test_real_interface_with_invalid_cpp_migration_and_display(self):
+    def test_real_interface_with_invalid_cpp_and_display(self):
         provider = Solution.create(self.root / "Provider", "Provider")
         interface = provider.add_project("Api", "Api", T.INTERFACE_LIBRARY)
         interface.add_file("src/unused.cpp", content="#error must_not_compile", auto_update=False)
@@ -325,8 +232,6 @@ int value();
         app = consumer.add_project("App", "App", T.EXECUTABLE)
         app.add_file("src/main.cpp", content='#include "api.hpp"\nint main() { Value v{42}; return v.number == 42 ? 0 : 1; }', auto_update=False)
         app.settings.link_solution(provider.root / ".cppbuild", T.INTERFACE_LIBRARY)
-        self.legacy(provider)
-        self.legacy(consumer)
         consumer = Solution.open(consumer.root / ".cppbuild")
         settings = consumer.settings.get()
         settings.solution_folders = SolutionFolderSettings()
@@ -336,7 +241,7 @@ int value();
         sln = consumer._last_update.artifacts[0].read_text(encoding="utf-8-sig")
         self.assertIn('"Provider_Api"', sln)
         self.assertIn('"Provider_Extra"', sln)
-        self.assertNotIn("header_only", (provider.root / "Api/CMakeLists.txt").read_text(encoding="utf-8"))
+        self.assertNotIn("header_only", (provider.config_directory / "projects/Api/CMakeLists.txt").read_text(encoding="utf-8"))
         self.assertFalse(list(consumer.root.rglob("unused.obj")))
         loaded = Solution.open(provider.root / ".cppbuild").get_project("Api")
         self.success(loaded.clean())

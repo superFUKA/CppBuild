@@ -52,28 +52,28 @@ class GeneratedFileTests(unittest.TestCase):
         plan = workspace.plan(self.ecs)
         documents = plan.documents()
         self.assertEqual(workspace.plan(self.ecs).documents(), documents)
-        top = documents[self.ecs.root / "CppBuildTopLevel.cmake"]
+        top = documents[self.ecs.config_directory / "CppBuildTopLevel.cmake"]
         self.assertIn("# STL::Containers", top)
         self.assertIn("# STL::Util", top)
         self.assertIn("STATIC)  # ECS::Core", top)
-        self.assertIn('set(CPPBUILD_LINKED_OUTPUT "_linked/STL")\nadd_subdirectory("deps/STL" "${CMAKE_BINARY_DIR}/${CPPBUILD_LINKED_OUTPUT}")', top)
+        self.assertIn('set(CPPBUILD_LINKED_OUTPUT "_linked/STL")\nadd_subdirectory("../deps/STL/.cppbuild" "${CMAKE_BINARY_DIR}/${CPPBUILD_LINKED_OUTPUT}")', top)
         self.assertNotIn("Tests", top)
         # The linked Solution's own files are written too, with its own top-level view.
-        self.assertIn(self.stl.root / "CppBuildTopLevel.cmake", documents)
-        self.assertIn(self.stl.root / "Tests/CMakeLists.txt", documents)
-        stl_top = documents[self.stl.root / "CppBuildTopLevel.cmake"]
-        self.assertIn('set(CPPBUILD_LINKED_OUTPUT "_linked/ECS")\nadd_subdirectory("../.."', stl_top)
-        stl_entry = documents[self.stl.root / "CMakeLists.txt"]
+        self.assertIn(self.stl.config_directory / "CppBuildTopLevel.cmake", documents)
+        self.assertIn(self.stl.config_directory / "projects/Tests/CMakeLists.txt", documents)
+        stl_top = documents[self.stl.config_directory / "CppBuildTopLevel.cmake"]
+        self.assertIn('set(CPPBUILD_LINKED_OUTPUT "_linked/ECS")\nadd_subdirectory("../../../.cppbuild"', stl_top)
+        stl_entry = documents[self.stl.config_directory / "CMakeLists.txt"]
         self.assertIn("if(BUILD_TESTING AND (CPPBUILD_WHOLE_SOLUTION OR DEFINED", stl_entry)
-        self.assertIn("set(CPPBUILD_LINKED ON)", documents[self.ecs.root / "CppBuildTopLevel.cmake"])
+        self.assertIn("set(CPPBUILD_LINKED ON)", documents[self.ecs.config_directory / "CppBuildTopLevel.cmake"])
         self.assertNotIn("::static", "".join(documents.values()))
-        tests = documents[self.stl.root / "Tests/CMakeLists.txt"]
+        tests = documents[self.stl.config_directory / "projects/Tests/CMakeLists.txt"]
         self.assertIn("set(gtest_force_shared_crt ON)", tests)
         # Only a local ZIP path is converted; TO_CMAKE_PATH would turn https:// into https:/.
         self.assertIn('if(NOT _cppbuild_googletest_url MATCHES "^[A-Za-z][A-Za-z0-9+.-]*://")', tests)
         self.assertNotIn("FORCE", tests)
         self.assertIn("target_link_libraries(STL_Tests PRIVATE GTest::gtest_main", tests)
-        self.assertIn('option(BUILD_TESTING', documents[self.ecs.root / "CppBuildTopLevel.cmake"])
+        self.assertIn('option(BUILD_TESTING', documents[self.ecs.config_directory / "CppBuildTopLevel.cmake"])
         text = "".join(documents.values()).replace("\\", "/")
         self.assertNotIn(str(self.root).replace("\\", "/"), text)
         self.ecs.set_build_settings(SolutionBuildSettings(cpp_standard=17, configuration="Release"))
@@ -81,7 +81,7 @@ class GeneratedFileTests(unittest.TestCase):
         values = self.ecs.settings.get()
         values.solution_folders = SolutionFolderSettings()
         self.ecs.settings.save(values)
-        displayed = workspace.plan(self.ecs).documents()[self.ecs.root / "CppBuildTopLevel.cmake"]
+        displayed = workspace.plan(self.ecs).documents()[self.ecs.config_directory / "CppBuildTopLevel.cmake"]
         self.assertIn("DISPLAY)  # STL::Tests", displayed)
         self.assertIn('set(CMAKE_FOLDER "LinkedProjects/STL")', displayed)
 
@@ -103,7 +103,13 @@ class StandaloneScenario:
             self.assertTrue(report.success, "\n".join(p.output[-3000:] for p in report.processes))
             self.assertEqual(report.processes[-1].output.strip(), "42")
             copy = root / "copy"
-            shutil.copytree(root / "ws", copy, ignore=lambda directory, names: [n for n in names if n == ".cppbuild"])
+            def management(directory, names):
+                # Keep the sources and the generated CMake files; leave the settings, build trees and locks behind.
+                if Path(directory).name == ".cppbuild":
+                    return [n for n in names if n in {"output", "operations", "project.json", "templates"}]
+                return [n for n in names if n in {"project.json", "types"}] if ".cppbuild" in Path(directory).parts else []
+            shutil.copytree(root / "ws", copy, ignore=management)
+            self.assertFalse(list(copy.rglob("project.json")))
             toolchain = generators.resolve(settings)
             extra = [f"-DCPPBUILD_GOOGLETEST_URL={archive}"] if archive else []
 
@@ -113,8 +119,8 @@ class StandaloneScenario:
                 self.assertEqual(result.returncode, 0, f"{command}\n{result.stdout[-4000:]}")
                 return result.stdout
 
-            for source, build, configuration, tests in ((copy / "ECS", root / "plain-ecs", "Release", False),
-                                                        (copy / "ECS/deps/STL", root / "plain-stl", "Debug", True)):
+            for source, build, configuration, tests in ((copy / "ECS/.cppbuild", root / "plain-ecs", "Release", False),
+                                                        (copy / "ECS/deps/STL/.cppbuild", root / "plain-stl", "Debug", True)):
                 run([*toolchain.configure(source, build), *extra])
                 run(["cmake", "--build", build, "--config", configuration])
                 output = run(["ctest", "--test-dir", build, "-C", configuration, "--no-tests=ignore"])
@@ -122,12 +128,12 @@ class StandaloneScenario:
             executable = root / "plain-ecs/bin/Release" / ("App.exe" if os.name == "nt" else "App")
             self.assertEqual(run([executable]).strip(), "42")
             # Without tests nothing is downloaded, as with CTest's BUILD_TESTING switch.
-            run([*toolchain.configure(copy / "ECS/deps/STL", root / "no-tests"), "-DBUILD_TESTING=OFF",
+            run([*toolchain.configure(copy / "ECS/deps/STL/.cppbuild", root / "no-tests"), "-DBUILD_TESTING=OFF",
                  "-DCPPBUILD_GOOGLETEST_URL=missing.zip"])
             run(["cmake", "--build", root / "no-tests", "--config", "Debug"])
             self.assertFalse((root / "no-tests/_deps").exists())
             # CMake's standard BUILD_SHARED_LIBS makes the libraries shared.
-            run([*toolchain.configure(copy / "ECS/deps/STL", root / "shared"), "-DBUILD_TESTING=OFF", "-DBUILD_SHARED_LIBS=ON"])
+            run([*toolchain.configure(copy / "ECS/deps/STL/.cppbuild", root / "shared"), "-DBUILD_TESTING=OFF", "-DBUILD_SHARED_LIBS=ON"])
             # Target names follow the type; STL::Containers is the alias of the selected one.
             run(["cmake", "--build", root / "shared", "--config", "Debug", "--target", "STL_Containers_shared"])
             self.assertTrue([p for p in (root / "shared").rglob("*Containers*")
@@ -136,7 +142,7 @@ class StandaloneScenario:
             foreign = root / "foreign"
             foreign.mkdir()
             (foreign / "CMakeLists.txt").write_text(
-                'cmake_minimum_required(VERSION 3.24)\nproject(Foreign LANGUAGES CXX)\nadd_subdirectory("../copy/ECS" ecs)\n')
+                'cmake_minimum_required(VERSION 3.24)\nproject(Foreign LANGUAGES CXX)\nadd_subdirectory("../copy/ECS/.cppbuild" ecs)\n')
             run(toolchain.configure(foreign, root / "plain-foreign"))
             run(["cmake", "--build", root / "plain-foreign", "--config", "Debug", "--target", "ECS_App"])
             built = [p for p in (root / "plain-foreign").rglob("App*") if p.name in {"App.exe", "App"} and p.is_file()]

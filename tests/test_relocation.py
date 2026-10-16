@@ -9,7 +9,7 @@ from cppbuild import (
     CMakePackage, CMakeSource, FileOperationReport, ImportedLibrary, ProjectBuildSettings,
     ProjectType as T, SettingsConflictError, SettingsError, Solution, SolutionBuildSettings,
 )
-from cppbuild import engine, storage
+from cppbuild import cmake_files, engine, storage
 from cppbuild.graph import resolve
 
 
@@ -78,26 +78,22 @@ class RelocationTests(unittest.TestCase):
         self.assertEqual(self.lib._build_settings.googletest_archive, "../../archives/gtest.zip")
         self.app.settings.save(self.app.settings.get())
 
-    def test_all_caches_are_archived_and_observation_is_stale(self):
+    def test_observation_is_stale_and_settings_stay_in_the_solution(self):
         old = self.lib.root
-        for kind in ("generated", "build"):
-            for context in ("vs2022-x64-static_library", "vs2022-Win32-shared_library"):
-                path = old / ".cppbuild" / kind / context / "marker"
-                path.parent.mkdir(parents=True)
-                path.write_text("old cache")
+        settings = self.lib.settings.path
         self.lib._known_artifacts = (old / "old.lib",)
         report = self.solution.move_project("Lib", "new/Lib", auto_update=False)
-        self.assertFalse((self.lib.root / ".cppbuild/build").exists())
-        self.assertFalse((self.lib.root / ".cppbuild/generated").exists())
-        archived = [p for p in report.changed_paths if "relocations" in p.parts]
-        self.assertEqual(len(archived), 2)
-        self.assertEqual(sum(len(list(p.rglob("marker"))) for p in archived), 4)
+        # Only the Project's own files move; its settings stay in .cppbuild.
+        self.assertEqual(self.lib.settings.path, settings)
+        self.assertTrue(settings.is_file())
+        self.assertFalse((self.lib.root / ".cppbuild").exists())
+        self.assertIn(old, report.changed_paths)
         info = next(p for p in self.solution.info().projects if p.name == "Lib")
         self.assertEqual(info.artifacts, ())
         self.assertEqual(info.generation_state, "stale")
 
     def test_invalid_destinations_leave_original_untouched(self):
-        for destination in ("..", ".", ".cppbuild/lib", "Lib", "Lib/inside", "App", "App/Lib"):
+        for destination in ("..", ".", ".cppbuild/lib", "Lib", "Lib/inside", "App", "App/src/Lib"):
             with self.subTest(destination=destination), self.assertRaises((SettingsError, FileExistsError)):
                 self.solution.move_project("Lib", destination, auto_update=False)
         existing = self.solution.root / "existing"
@@ -139,7 +135,7 @@ class RelocationTests(unittest.TestCase):
         with self.assertRaises(SettingsConflictError):
             self.solution.move_project("Lib", "new/Lib", auto_update=False)
         self.lib.settings.reload()
-        with storage.write_lock(self.lib.root / ".cppbuild/generated/context"):
+        with storage.write_lock(self.solution.config_directory / "operations"):
             with self.assertRaises(SettingsError):
                 self.solution.move_project("Lib", "new/Lib", auto_update=False)
         self.assertEqual(self.solution.settings.get().projects["Lib"], "Lib")
@@ -208,9 +204,9 @@ class RelocationVS2022Tests(unittest.TestCase):
         self.assertFalse(old.exists())
         success(self.app.run())
         success(self.solution.build())
-        entry = (self.solution.root / "CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertIn('add_subdirectory("libs/移動 Library")', entry)
-        self.assertNotIn(old.relative_to(self.solution.root).as_posix() + '"', entry)
+        entry = cmake_files.entry_path(self.lib).read_text(encoding="utf-8")
+        self.assertIn('/libs/移動 Library" ABSOLUTE)', entry)
+        self.assertNotIn("/" + old.relative_to(self.solution.root).as_posix() + '" ABSOLUTE)', entry)
         moved = self.solution.move_project("App", "apps/移動 App")
         self.assertTrue(moved.success, str(moved))
         self.solution.set_build_settings(SolutionBuildSettings(configuration="Release"))

@@ -17,7 +17,8 @@ from . import logs
 _log = logs.logger("storage")
 
 
-CURRENT_SCHEMA = 4
+# One .cppbuild per Solution, holding its Projects' settings (2026-10-17). Older layouts are not read.
+CURRENT_SCHEMA = 5
 
 
 def encoded(value):
@@ -205,10 +206,10 @@ def write_lock(directory):
 
 
 @contextmanager
-def operation_lock(*roots):
-    """The operation locks of Solution and Project roots, in a fixed order."""
+def operation_lock(*configs):
+    """The operation locks of Solutions (their .cppbuild directories), in a fixed order."""
     with ExitStack() as stack:
-        for directory in sorted({Path(root) / ".cppbuild/operations" for root in roots}):
+        for directory in sorted({Path(config) / "operations" for config in configs}):
             stack.enter_context(write_lock(directory))
         yield
 
@@ -223,29 +224,35 @@ def contained(root, value):
     return result
 
 
+def remove_file(path):
+    """Delete a management file; an open transaction puts it back if it is undone."""
+    path = Path(path)
+    recorded = before_write(path)
+    path.unlink()
+    logs.removed(path)
+    after_write(recorded, None)
+
+
 def object_fields(value, required):
     if not isinstance(value, dict) or set(value) != set(required):
         raise SettingsError(f"Expected fields: {sorted(required)}")
 
 
-def manifest(path, kind, *, root=None, with_version=False):
+def envelope(path, kind):
+    """The data of a management file of kind, checked to be of the current schema."""
     result = read_json(path)
     object_fields(result, {"schema_version", "kind", "data"})
-    if type(result["schema_version"]) is not int or result["schema_version"] not in {1, 2, 3, 4} or result["kind"] != kind:
-        raise SettingsError(f"Unsupported schema or document kind: {path}")
+    if result["schema_version"] != CURRENT_SCHEMA or result["kind"] != kind:
+        raise SettingsError(f"Unsupported schema or document kind (this CppBuild reads schema {CURRENT_SCHEMA} "
+                            f"{kind} files): {path}")
+    return result["data"]
+
+
+def manifest(path, kind, *, root):
     from .paths import decode
-    data = decode(path, kind, result["data"], result["schema_version"], root=root)
-    return (data, result["schema_version"]) if with_version else data
+    return decode(path, kind, envelope(path, kind), root)
 
 
-def document(path, kind, data, *, version=CURRENT_SCHEMA):
+def document(path, kind, data, *, root):
     from .paths import encode
-    return encoded({"schema_version": version, "kind": kind, "data": encode(path, kind, data)})
-
-
-def needs_migration(path):
-    return read_json(path).get("schema_version") < CURRENT_SCHEMA
-
-
-def envelope(kind, data):
-    return {"schema_version": 1, "kind": kind, "data": data}
+    return encoded({"schema_version": CURRENT_SCHEMA, "kind": kind, "data": encode(path, kind, data, root)})

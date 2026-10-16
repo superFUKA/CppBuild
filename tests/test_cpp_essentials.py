@@ -7,6 +7,8 @@ import struct
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import (CMakeSettings, ProjectBuildSettings, ProjectType as T, SettingsError, Solution,
                       SolutionBuildSettings)
 from cppbuild import engine, workspace
@@ -22,7 +24,7 @@ class SettingsTests(unittest.TestCase):
         self.lib = self.solution.add_project("Lib", "Lib", T.STATIC_LIBRARY)
 
     def entry(self, project):
-        return workspace.plan(self.solution).documents()[project.root / "CMakeLists.txt"]
+        return workspace.plan(self.solution).documents()[entry_path(project)]
 
     def saved(self, project):
         return json.loads(project.settings.path.read_text())["data"]

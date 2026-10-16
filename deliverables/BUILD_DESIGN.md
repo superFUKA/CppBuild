@@ -1,5 +1,7 @@
 # 更新・ビルド設定・生成物の詳細案
 
+> 2026-10-17更新：生成ファイルを含むCppBuildのファイルはすべてSolutionの`.cppbuild`に置き、Projectのディレクトリには書かない。Projectの移動でのキャッシュ退避（`.cppbuild/relocations`）はなくなった。現行は[配置変更の設計](SOLUTION_LAYOUT_PLAN.md)と[利用手順](USAGE.md#solution-layout)を優先する。
+
 > 2026-10-01更新：ユーザー合意により、Projectごとの独立CMake構成をやめ、Solutionを1つのCMakeプロジェクト（ソースツリーに生成するCMakeLists.txt、Solution・生成環境ごとの1ツリー）として扱う方式へ移行した。以下の独立構成・include_external_msproject・IMPORTED参照・共有依存の保護に関する記述は経緯の記録で、現行仕様は[API設計](API_DESIGN.md)冒頭と[利用手順](USAGE.md#generated-cmake)を優先する。
 
 > 2026-09-17 実装開始後の追記：M1（管理モデル・設定保存・非保存ビルド設定）を実装し、自動テスト13件を確認。最新の進捗・検証・次の作業は[実装記録](IMPLEMENTATION_STATUS.md)を参照。以下の「未着手」「実装はまだ開始しない」は設計整理時点の記録であり、今回の実装依頼を制限しない。設計の合意状態は維持する。

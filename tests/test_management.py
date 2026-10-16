@@ -32,7 +32,8 @@ class ManagementTests(unittest.TestCase):
         with self.assertRaises(SettingsError):
             self.solution.remove_project("App")
         self.solution.remove_project("Tool")
-        self.assertTrue(tool.settings.path.is_file())
+        # Its settings belong to the Solution and go with it.
+        self.assertFalse((self.root / ".cppbuild/projects/Tool").exists())
         with self.assertRaises(SettingsError):
             tool.settings.get()
 
@@ -139,12 +140,17 @@ class ManagementTests(unittest.TestCase):
             self.solution.settings.save(values)
 
     def test_invalid_paths_types_and_schema(self):
-        for directory in ("..", ".", ".cppbuild/private"):
+        for directory in (".cppbuild/private", ".cppbuild", "Other/.cppbuild/x"):
             with self.subTest(directory=directory), self.assertRaises(SettingsError):
                 self.solution.add_project(directory, "Bad", T.EXECUTABLE)
         app = self.app()
+        # A source directory inside another Project's: its files would belong to both.
         with self.assertRaises(SettingsError):
-            self.solution.add_project("App/nested", "Nested", T.EXECUTABLE)
+            self.solution.add_project("App/src/nested", "Nested", T.EXECUTABLE)
+        with self.assertRaises(SettingsError):
+            self.solution.add_project("App", "Same", T.EXECUTABLE)
+        with self.assertRaises(SettingsError):
+            self.solution.add_project("Elsewhere", "app", T.EXECUTABLE)
         for invalid in ([], "unknown", True):
             with self.subTest(invalid=invalid), self.assertRaises(SettingsError):
                 app.set_build_settings(ProjectBuildSettings(configuration=invalid))
@@ -179,7 +185,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_type_file_external_changes_detected(self):
         app = self.app()
-        type_path = next((app.root / ".cppbuild/types").glob("*.json"))
+        type_path = next((app.settings.path.parent / "types").glob("*.json"))
         raw = json.loads(type_path.read_text())
         raw["data"]["compile_definitions"] = ["EXTERNAL"]
         type_path.write_text(json.dumps(raw))

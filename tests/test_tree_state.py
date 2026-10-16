@@ -23,10 +23,9 @@ class TreeStateTests(unittest.TestCase):
         return {p.name: (p.generation_state, p.build_state) for p in self.solution.info().projects}
 
     def test_individual_and_whole_clean_share_the_solution_lock(self):
-        with storage.write_lock(self.solution.root / ".cppbuild/operations"):
+        with storage.write_lock(self.solution.config_directory / "operations"):
             with self.assertRaises(SettingsConflictError):
                 self.app.clean()
-        with storage.write_lock(self.app.root / ".cppbuild/operations"):
             with self.assertRaises(SettingsConflictError):
                 self.solution.clean()
         self.assertTrue(self.app.clean().success)

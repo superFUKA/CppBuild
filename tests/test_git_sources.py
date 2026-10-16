@@ -8,7 +8,8 @@ import unittest
 
 from cppbuild import (CMakeSettings, GitFetchError, GitSourceConflictError, ProjectType as T, SettingsError, Solution,
                       SolutionBuildSettings, TemplateTools)
-from cppbuild import generators, git_sources, workspace
+from cppbuild import cmake_files, generators, git_sources, workspace
+from cppbuild.graph import resolve
 
 GIT = shutil.which("git")
 IGNORE = "deps/\n.cppbuild/output/\n.cppbuild/operations/\n"
@@ -68,6 +69,26 @@ class GitSourceTests(unittest.TestCase):
         self.app = self.app_solution.add_project("App", "App", T.EXECUTABLE)
         self.app.add_file("src/main.cpp", content="int main() { return 0; }\n", auto_update=False)
 
+    def test_solution_in_a_subdirectory_and_projects_outside_the_repository(self):
+        # .cppbuild may be anywhere in the repository; GitSource.path says where.
+        repo = self.root / "repos/Mono"
+        mono = Solution.create(repo / "build/sln", "Mono", base_directory="../..")
+        lib = mono.add_project("src/lib", "MonoLib", T.STATIC_LIBRARY)
+        lib.add_file("src/lib.cpp", content="int mono() { return 1; }\n", auto_update=False)
+        publish(mono, repo)
+        self.app.settings.link_git(url(repo), solution_path="build/sln/.cppbuild", link_type=T.STATIC_LIBRARY)
+        self.assertEqual(resolve([self.app])[1][0].project.root, self.app_solution.root / "deps/Mono/src/lib")
+        # A Project outside its repository could not be built from a clone alone.
+        outside = self.root / "repos/Out"
+        out = Solution.create(outside / "sln", "Out", base_directory="..")
+        out.add_project(self.root / "loose/lib", "OutLib", T.STATIC_LIBRARY)
+        publish(out, outside)
+        tool = self.app_solution.add_project("Tool", "Tool", T.EXECUTABLE)
+        with self.assertRaisesRegex(SettingsError, "outside its repository"):
+            tool.settings.link_git(url(outside), solution_path="sln/.cppbuild", link_type=T.STATIC_LIBRARY)
+        self.assertFalse((self.app_solution.root / "deps/Out").exists())
+        self.assertNotIn("Out", self.app_solution.settings.get().git_sources)
+
     def test_link_records_the_commit_and_resolves_the_clone(self):
         stl, _ = library(self.root / "repos/STL", "STL", 1)
         first = publish(stl, self.root / "repos/STL")
@@ -79,8 +100,9 @@ class GitSourceTests(unittest.TestCase):
         self.assertEqual(git("rev-parse", "HEAD", cwd=clone), first)
         plan = workspace.plan(self.app_solution)
         self.assertEqual({p.name for p in plan.projects.values()}, {"App", "STLLib"})
-        top = plan.documents()[self.app_solution.root / "CppBuildTopLevel.cmake"]
-        self.assertIn(f'_cppbuild_git_source("deps/STL" "{url(self.root / "repos/STL")}" {first} ".cppbuild")', top)
+        top = plan.documents()[self.app_solution.config_directory / "CppBuildTopLevel.cmake"]
+        # Places are relative to .cppbuild, where the generated file is.
+        self.assertIn(f'_cppbuild_git_source("../deps/STL" "{url(self.root / "repos/STL")}" {first} ".cppbuild")', top)
         self.assertIn('option(CPPBUILD_FETCH', top)
         # A newer commit upstream: the record and the clone stay until set_git_source is asked.
         (stl.get_project("STLLib").root / "src/extra.cpp").write_text("int extra() { return 2; }\n")
@@ -126,8 +148,8 @@ class GitSourceTests(unittest.TestCase):
         self.assertEqual({p.name for p in plan.projects.values()}, {"App", "STLLib", "CoreLib"})
         core_root = next(p for p in plan.projects.values() if p.name == "CoreLib").solution.root
         self.assertEqual(core_root, (self.app_solution.root / "deps/Mono/libs/Core").resolve())
-        top = plan.documents()[self.app_solution.root / "CppBuildTopLevel.cmake"]
-        self.assertIn(f'"deps/Mono" "{url(self.root / "repos/Mono")}" {core_first} "libs/Core/.cppbuild"', top)
+        top = plan.documents()[self.app_solution.config_directory / "CppBuildTopLevel.cmake"]
+        self.assertIn(f'"../deps/Mono" "{url(self.root / "repos/Mono")}" {core_first} "libs/Core/.cppbuild"', top)
 
         # Net records Core differently, and App records nothing for it: an error before saving.
         before = self.app_solution.settings.get()
@@ -247,28 +269,30 @@ class PlainCMakeScenario:
             git("clone", "-q", url(root / "repos/App"), str(checkout))
             self.assertFalse((checkout / "deps").exists())
             # Without fetching, the missing places are listed with how to place them by hand.
-            output = cmake(*toolchain.configure(checkout, root / "off")[1:], "-DCPPBUILD_FETCH=OFF", ok=False)
+            source = checkout / ".cppbuild"
+            output = cmake(*toolchain.configure(source, root / "off")[1:], "-DCPPBUILD_FETCH=OFF", ok=False)
             self.assertIn("deps/STL", output)
             self.assertIn("deps/Core", output)
             self.assertIn("git clone", output)
             self.assertFalse((checkout / "deps").exists())
-            cmake(*toolchain.configure(checkout, root / "build")[1:])
+            cmake(*toolchain.configure(source, root / "build")[1:])
             self.assertTrue((checkout / "deps/Core/.cppbuild/project.json").is_file())
             cmake("--build", root / "build", "--config", "Debug")
             executable = root / "build/bin/Debug" / ("App.exe" if os.name == "nt" else "App")
             self.assertEqual(subprocess.run([str(executable)], stdout=subprocess.PIPE, text=True).stdout.strip(), "42")
             # A newer record than the clone in place: a warning, and the clone is left as it is.
             head = git("rev-parse", "HEAD", cwd=checkout / "deps/STL")
-            text = (checkout / "CppBuildTopLevel.cmake").read_text()
-            (checkout / "CppBuildTopLevel.cmake").write_text(text.replace(head, "0" * 40))
-            output = " ".join(cmake(*toolchain.configure(checkout, root / "build")[1:]).split())  # CMake wraps warnings
+            text = (source / "CppBuildTopLevel.cmake").read_text()
+            (source / "CppBuildTopLevel.cmake").write_text(text.replace(head, "0" * 40))
+            output = " ".join(cmake(*toolchain.configure(source, root / "build")[1:]).split())  # CMake wraps warnings
             self.assertIn(f"deps/STL is at {head}, but {'0' * 40} is recorded", output)
             self.assertIn("it is left unchanged", output)
             self.assertEqual(git("rev-parse", "HEAD", cwd=checkout / "deps/STL"), head)
             # Files from an incompatible CppBuild are reported.
-            entry = checkout / "deps/STL/CMakeLists.txt"
-            entry.write_text(entry.read_text().replace("PROPERTY CPPBUILD_FORMAT 1", "PROPERTY CPPBUILD_FORMAT 0"))
-            self.assertIn("incompatible CppBuild", cmake(*toolchain.configure(checkout, root / "build")[1:], ok=False))
+            entry = checkout / "deps/STL/.cppbuild/CMakeLists.txt"
+            entry.write_text(entry.read_text().replace(f"PROPERTY CPPBUILD_FORMAT {cmake_files.FORMAT}",
+                                                       "PROPERTY CPPBUILD_FORMAT 0"))
+            self.assertIn("incompatible CppBuild", cmake(*toolchain.configure(source, root / "build")[1:], ok=False))
 
 
 @unittest.skipUnless(GIT and os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 and git required")

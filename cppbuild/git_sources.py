@@ -94,7 +94,17 @@ def unique_name(url, used):
 
 
 def base(root, values):
-    return storage.contained(root, values.dependency_directories[0])
+    from .paths import resolve
+    return resolve(root, values.dependency_directories[0])
+
+
+def _shown(solution, path):
+    """path relative to the Solution's base directory, for messages."""
+    from .paths import relative
+    try:
+        return relative(solution.root, path)
+    except SettingsError:
+        return str(path)
 
 
 # The flattened list ------------------------------------------------------------------
@@ -129,7 +139,7 @@ class FetchReport:
 
 def _records(config):
     """A linked Solution's own git_sources, read without opening its Projects."""
-    raw = storage.manifest(config / "project.json", "solution").get("git_sources", {})
+    raw = storage.envelope(config / "project.json", "solution").get("git_sources", {})
     if not isinstance(raw, dict):
         raise SettingsError(f"git_sources must be a mapping: {config}")
     result = {}
@@ -294,7 +304,7 @@ def fetch(solution, values=None, created=None):
     failures, fetched = [], []
 
     def fetch_one(status):
-        relative = status.directory.relative_to(solution.root).as_posix()
+        relative = _shown(solution, status.directory)
         if status.directory.exists():
             failures.append(FetchFailure(status.name, relative, status.url, status.revision,
                                          f"the place exists without {status.path}/project.json"))
@@ -321,7 +331,7 @@ def fetch(solution, values=None, created=None):
         except _Failure:
             break
         if code == 0 and head != status.revision:
-            warnings.append(f"{status.directory.relative_to(solution.root).as_posix()} is at {head}, but {status.revision} "
+            warnings.append(f"{_shown(solution, status.directory)} is at {head}, but {status.revision} "
                             f"is recorded for {status.url}; CppBuild leaves it unchanged")
     return FetchReport(tuple(sources), tuple(fetched), tuple(warnings))
 
@@ -373,12 +383,12 @@ def _place_for(solution, values, url, path, revision, *, keep, created=None):
             created.append(directory)
         return name, record
     except _Failure as exc:
-        relative = directory.relative_to(solution.root).as_posix()
+        relative = _shown(solution, directory)
         raise GitFetchError([FetchFailure(name, relative, url, revision or "HEAD", str(exc))]) from exc
 
 
 def prepare_link(solution, url, revision, path, created):
-    """(name, record, .cppbuild location) for linking url; checks every git source before anything is saved.
+    """(name, record, .cppbuild location, clone) for linking url; checks every git source before anything is saved.
 
     created, a list, receives each place cloned, for discard() when the link is not saved.
     """
@@ -393,7 +403,8 @@ def prepare_link(solution, url, revision, path, created):
         fetch(solution, values, created)
     else:
         walk(solution.root, values)
-    return name, record, base(solution.root, values) / name / record.path
+    place = base(solution.root, values) / name
+    return name, record, place / record.path, place
 
 
 def discard(directories):

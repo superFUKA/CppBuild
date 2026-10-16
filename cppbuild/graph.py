@@ -1,6 +1,7 @@
 """Validate a dependency closure before generating or starting any tools."""
 from dataclasses import dataclass
 
+from . import paths, storage
 from .models import Dependency, SettingsError
 
 
@@ -32,9 +33,6 @@ def resolve(projects, *, include_external_members=False):
 
     def registry(solution):
         if solution not in registries:
-            from . import storage
-            if storage.needs_migration(solution.settings.path):
-                solution.settings.reload()
             registries[solution] = solution.settings._read().references
         return registries[solution]
 
@@ -90,8 +88,9 @@ def resolve(projects, *, include_external_members=False):
         registry(project.solution)
         settings = project._resolved_build_settings(requested, project_types, shared_libraries)
         project_guid = project.settings._data.guid
-        previous = locations.setdefault(project_guid, project.root)
-        if previous != project.root:
+        # A Project is its settings file: Projects of two Solutions may share a directory.
+        previous = locations.setdefault(project_guid, project.settings.path)
+        if previous != project.settings.path:
             raise SettingsError("The same Project GUID exists at multiple locations")
         key = (project_guid, settings.project_type.value)
         if key in visiting:
@@ -112,7 +111,7 @@ def resolve(projects, *, include_external_members=False):
             except KeyError as exc:
                 raise SettingsError(f"Missing dependency Project GUID: {reference.project_guid}") from exc
             child = visit(other, reference.project_type)
-            if any(d.project.root == child.project.root and d.settings.project_type != child.settings.project_type for d in node.dependencies):
+            if any(d.project.settings.path == child.project.settings.path and d.settings.project_type != child.settings.project_type for d in node.dependencies):
                 raise SettingsError("One consumer cannot link multiple kinds of the same Project")
             if not compatible(settings, child.settings):
                 raise SettingsError(f"Incompatible configuration or generation environment: {project.name} -> {other.name}")
@@ -137,7 +136,7 @@ def resolve(projects, *, include_external_members=False):
                     continue
                 expanded.add(config)
                 for project in solution.projects():
-                    if any(node.project.root == project.root for node in ordered):
+                    if any(node.project.settings.path == project.settings.path for node in ordered):
                         continue
                     selected = project._build_settings.project_type
                     visit(project, selected or project.settings._data.initial_type)
@@ -155,21 +154,19 @@ def _inherited(settings):
 def _dependency_directories(solutions):
     """GUID -> Solution config found directly under the top-level dependency directories."""
     from .core import Solution
-    from . import storage
     from .git_sources import statuses
     guids, opened = {}, {}
-    for solution in sorted(solutions, key=lambda s: str(s.root)):
+    for solution in sorted(solutions, key=lambda s: str(s.config_directory)):
         local = {p.settings._data.guid for p in solution.projects()}
         configs = []
         for directory in solution.settings._data.dependency_directories:
-            root = storage.contained(solution.root, directory)
+            root = paths.resolve(solution.root, directory)
             if root.is_dir():
-                configs += [(child / ".cppbuild").resolve() for child in sorted(root.iterdir())]
+                configs += discover(root, solution.config_directory)
         # Git sources, including linked Solutions' own and ones deeper in a repository.
         configs += [status.config.resolve() for status in statuses(solution) if status.present]
         for config in dict.fromkeys(configs):
-            manifest = config / "project.json"
-            if not manifest.is_file() or storage.read_json(manifest).get("kind") != "solution":
+            if _solution_manifest(config) is None:
                 continue
             if config not in opened:
                 opened[config] = Solution.open(config)
@@ -182,3 +179,74 @@ def _dependency_directories(solutions):
                     raise SettingsError(f"The same Project GUID exists in dependency directories: {project_guid} "
                                         f"({previous.parent}, {config.parent})")
     return guids, opened
+
+
+def _solution_manifest(config):
+    """The manifest data of the Solution whose settings directory is config, or None."""
+    manifest = config / "project.json"
+    if not manifest.is_file():
+        return None
+    document = storage.read_json(manifest)
+    if not isinstance(document, dict) or document.get("kind") != "solution" or not isinstance(document.get("data"), dict):
+        return None
+    return document["data"]
+
+
+# Never holding a Solution. "build" is not among them: .cppbuild may be placed below a directory
+# of that name, so CMake build trees are recognized by their CMakeCache.txt instead.
+DISCOVERY_EXCLUDED = {paths.MANAGEMENT, ".git", "__pycache__", ".cache", ".venv", "node_modules"}
+
+
+def _enterable(path):
+    from .git_sources import FETCHING
+    from . import output_paths
+    try:
+        if not path.is_dir() or path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            return False
+        return (path.name not in DISCOVERY_EXCLUDED and not path.name.endswith(FETCHING)
+                and not output_paths.generated_directory(path) and not (path / "CMakeCache.txt").is_file())
+    except OSError:
+        return False
+
+
+def discover(directory, own=None):
+    """Solution settings directories (.cppbuild) at any depth below directory, own excepted.
+
+    Each child of directory is searched as a whole, and a Solution inside a dependency
+    directory of another Solution found in the same child is left out: that is the other
+    Solution's own copy of a dependency, which the top-level Solution resolves itself
+    (otherwise its GUID would exist twice). Only directories are listed, never files.
+    """
+    found = []
+    try:
+        children = sorted(directory.iterdir())
+    except OSError:
+        return found
+    for child in children:
+        if not _enterable(child):
+            continue
+        candidates, pending = [], [child]
+        while pending:
+            current = pending.pop(0)
+            config = (current / paths.MANAGEMENT).resolve()
+            data = _solution_manifest(config)
+            if data is not None and (own is None or paths.key(config) != paths.key(own)):
+                places = []
+                for value in data.get("dependency_directories", []):
+                    try:
+                        places.append(paths.resolve(config, value))
+                    except SettingsError:
+                        pass
+                candidates.append((config, places))
+            try:
+                entries = sorted(current.iterdir())
+            except OSError:
+                continue
+            pending += [entry for entry in entries if _enterable(entry)]
+        for config, _ in candidates:
+            nested = any(other != config and any(paths.inside(config, place) and paths.inside(place, child)
+                                                 and paths.key(place) != paths.key(child) for place in places)
+                         for other, places in candidates)
+            if not nested:
+                found.append(config)
+    return found

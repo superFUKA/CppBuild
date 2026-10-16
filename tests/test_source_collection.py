@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import CMakeSettings, ProjectType as T, SettingsError, Solution, SolutionBuildSettings
 from cppbuild import engine, generators, workspace
 
@@ -23,10 +25,10 @@ class GeneratedFileTests(unittest.TestCase):
 
     def test_adding_and_removing_files_changes_no_generated_file(self):
         before = self.documents()
-        entry = before[self.app.root / "CMakeLists.txt"]
+        entry = before[entry_path(self.app)]
         self.assertIn('_cppbuild_collect_sources(_cppbuild_sources _cppbuild_modules "src" "include")', entry)
         self.assertNotIn("main.cpp", "".join(before.values()))
-        self.assertIn("function(_cppbuild_collect_sources result modules)", before[self.solution.root / "CMakeLists.txt"])
+        self.assertIn("function(_cppbuild_collect_sources result modules)", before[self.solution.config_directory / "CMakeLists.txt"])
         self.app.add_file("src/more.cpp", content="int more() { return 1; }\n", auto_update=False)
         self.app.add_file("include/more.hpp", content="#pragma once\n", auto_update=False)
         self.assertEqual(self.documents(), before)
@@ -36,7 +38,7 @@ class GeneratedFileTests(unittest.TestCase):
         values.source_directories = ["code", "src"]
         self.app.settings.save(values)
         self.assertIn('_cppbuild_collect_sources(_cppbuild_sources _cppbuild_modules "code" "src")',
-                      self.documents()[self.app.root / "CMakeLists.txt"])
+                      self.documents()[entry_path(self.app)])
 
     def test_names_a_cmake_list_cannot_hold_are_rejected(self):
         (self.app.root / "src/semi;colon.cpp").write_text("int x;\n")

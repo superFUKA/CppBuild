@@ -263,7 +263,7 @@ def templates(s):
     s.check('template omits ephemeral settings', clone.info().build_settings.configuration == 'Debug')
     clone.set_build_settings(settings())  # Build settings are not restored; select the environment again.
     s.report('restored consumer runs', clone.get_project('App').run())
-    material_path = clone.root / clone.settings.file_templates()['function']
+    material_path = clone.config_directory / 'templates' / clone.settings.file_templates()['function']
     clone.settings.set_file_template('alias', material_path)
     clone.settings.remove_file_template('function')
     s.report('registered material alias', clone.get_project('App').add_file('include/another.hpp', template_name='alias', replacements={'name': 'another'}))
@@ -303,7 +303,7 @@ def testing(s):
 
 
 def standalone(s):
-    """The generated CMake files alone: copied elsewhere without .cppbuild, configured by plain cmake."""
+    """The generated CMake files alone: copied elsewhere without the management files, configured by plain cmake."""
     import shutil
     import subprocess
     from cppbuild import generators
@@ -333,24 +333,32 @@ def standalone(s):
     checks.set_build_settings(ProjectBuildSettings(googletest_archive=s.archive))
     ecs.set_build_settings(settings(test_projects=['Tests']))
     s.report('CppBuild whole test', ecs.test())
-    from cppbuild.cmake_files import generated_file
+    from cppbuild.cmake_files import entry_path, generated_file
     def generated():
-        # The build tree below .cppbuild holds third-party CMake files (GoogleTest); only CppBuild's count.
-        return {p: p.read_bytes() for p in ecs.root.rglob('*') if '.cppbuild' not in p.parts and generated_file(p)}
+        # Build trees below .cppbuild/output hold third-party CMake files (GoogleTest); only CppBuild's count.
+        return {p: p.read_bytes() for p in ecs.root.rglob('*') if 'output' not in p.parts and generated_file(p)}
     first = generated()
-    expected = [ecs.root / 'CMakeLists.txt', ecs.root / 'CppBuildTopLevel.cmake', stl.root / 'CMakeLists.txt',
-                stl.root / 'CppBuildTopLevel.cmake', *(p.root / 'CMakeLists.txt' for p in [*ecs.projects(), *stl.projects()])]
+    expected = [ecs.config_directory / 'CMakeLists.txt', ecs.config_directory / 'CppBuildTopLevel.cmake',
+                stl.config_directory / 'CMakeLists.txt', stl.config_directory / 'CppBuildTopLevel.cmake',
+                *(entry_path(p) for p in [*ecs.projects(), *stl.projects()])]
     s.check('generated files written', set(first) == set(expected))
+    s.check('every generated file is in a .cppbuild', all('.cppbuild' in p.parts for p in first))
     s.report('CppBuild update again', ecs.update())
     s.check('generated files are stable', first == generated())
     s.check('generated files have no absolute paths',
             not any(str(s.root).replace('\\', '/') in p.read_text(encoding='utf-8').replace('\\', '/') for p in first))
     copy = s.root / 'Copy'
-    shutil.copytree(ecs.root, copy, ignore=lambda directory, names: [n for n in names if n == '.cppbuild'])
+    def management(directory, names):
+        # Keep the sources and the generated CMake files; leave the settings, build trees and locks behind.
+        if Path(directory).name == '.cppbuild':
+            return [n for n in names if n in {'output', 'operations', 'project.json', 'templates'}]
+        return [n for n in names if n in {'project.json', 'types'}] if '.cppbuild' in Path(directory).parts else []
+    shutil.copytree(ecs.root, copy, ignore=management)
+    s.check('copy has no settings', not list(copy.rglob('project.json')))
     toolchain = generators.resolve(settings())
     url = ['-DCPPBUILD_GOOGLETEST_URL=' + s.archive] if s.archive else []
-    for name, root, build, configuration in [('ECS', copy, s.root / 'plain', 'Release'),
-                                              ('STL', copy / 'deps/STL', s.root / 'plain-stl', 'Debug')]:
+    for name, root, build, configuration in [('ECS', copy / '.cppbuild', s.root / 'plain', 'Release'),
+                                              ('STL', copy / 'deps/STL/.cppbuild', s.root / 'plain-stl', 'Debug')]:
         for step, command in [('configure', [*toolchain.configure(root, build), *url]),
                               ('build', ['cmake', '--build', build, '--config', configuration]),
                               ('ctest', ['ctest', '--test-dir', build, '-C', configuration, '--output-on-failure'])]:
@@ -364,7 +372,66 @@ def standalone(s):
     s.check('plain executable runs', result.returncode == 0 and result.stdout.strip() == '42')
 
 
-SCENARIOS = {f.__name__: f for f in [lifecycle, libraries, external, execution, templates, testing, standalone]}
+def layout(s):
+    """.cppbuild and sources anywhere: a repository whose Solutions live apart from the sources they build."""
+    import shutil
+    import subprocess
+    from cppbuild import generators
+    repo = s.root / 'リポジトリ repo'
+    # A library repository whose Solution is not at its root, found below the dependency directory.
+    vendor = Solution.create(repo / 'deps/Vendor/build/cppbuild', 'Vendor', base_directory='../..')
+    library = vendor.add_project('src', 'VendorLib', T.STATIC_LIBRARY)
+    add(library, 'include/vendor.hpp', '#pragma once\nint vendor();\n')
+    add(library, 'src/vendor.cpp', '#include "vendor.hpp"\nint vendor() { return 40; }\n')
+    # Two Solutions in one repository share the sources of Core; the App Solution also uses code outside it.
+    solution = Solution.create(repo / 'sln/App', 'App', base_directory='../..')
+    data = solution.settings.get()
+    data.dependency_directories = ['deps']
+    solution.settings.save(data)
+    core = solution.add_project('src/core', 'Core', T.STATIC_LIBRARY)
+    add(core, 'src/core.cpp', '#include "vendor.hpp"\nint core() { return vendor() + 2; }\n')
+    core.settings.link_solution(vendor.config_directory, T.STATIC_LIBRARY)
+    program = solution.add_project('src/app', 'Program', T.EXECUTABLE)
+    add(program, 'src/main.cpp', '#include <iostream>\nint core();\nint main() { std::cout << core() << "\\n"; return core() == 42 ? 0 : 1; }\n')
+    program.settings.link_project(core, T.STATIC_LIBRARY)
+    solution.set_build_settings(settings())
+    result = s.report('build and run from .cppbuild apart from the sources', program.run())
+    s.check('program output', '42' in output(result))
+    s.check('no CppBuild file beside the sources', not list((repo / 'src').rglob('CMakeLists.txt'))
+            and not list((repo / 'src').rglob('.cppbuild')))
+    tools = Solution.create(repo / 'sln/Tools', 'Tools', base_directory='../..')
+    shared = tools.add_project('src/core', 'Core', T.STATIC_LIBRARY)
+    shared.settings.link_solution(vendor.config_directory, T.STATIC_LIBRARY)
+    tools.set_build_settings(settings())
+    s.check('two Solutions share one directory', shared.root == core.root)
+    s.report('the other Solution builds the shared sources', tools.build())
+    # Moving files with git, then only the record; moving .cppbuild itself.
+    shutil.move(str(repo / 'src/app'), str(repo / 'apps/app'))
+    s.report('record a Project moved by hand', solution.move_project('Program', 'apps/app', move_files=False, auto_update=False))
+    s.record('move .cppbuild', solution.move_config('build/solutions/App'))
+    result = s.report('run after both moves', program.run())
+    s.check('output after moves', '42' in output(result))
+    reopened = Solution.open(repo / 'build/solutions/App/.cppbuild')
+    s.check('reopened keeps every place', reopened.get_project('Program').root == repo / 'apps/app'
+            and reopened.root == repo)
+    s.rejects('a source directory inside another Project', SettingsError,
+              lambda: solution.add_project('src/core/src/inner', 'Inner', T.STATIC_LIBRARY))
+    # Plain CMake from the moved .cppbuild.
+    toolchain = generators.resolve(settings())
+    build = s.root / 'plain'
+    for step, command in [('configure', toolchain.configure(reopened.config_directory, build)),
+                          ('build', ['cmake', '--build', build, '--config', 'Debug'])]:
+        result = subprocess.run([str(c) for c in command], env=toolchain.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors='replace')
+        s.record(f'plain {step}', {'command': [str(c) for c in command], 'returncode': result.returncode,
+                                   'output': result.stdout[-4000:]})
+        s.check(f'plain {step} succeeded', result.returncode == 0)
+    executable = build / ('bin/Debug/Program.exe' if os.name == 'nt' else 'bin/Debug/Program')
+    result = subprocess.run([str(executable)], stdout=subprocess.PIPE, text=True)
+    s.check('plain executable runs', result.returncode == 0 and result.stdout.strip() == '42')
+
+
+SCENARIOS = {f.__name__: f for f in [lifecycle, libraries, external, execution, templates, testing, standalone, layout]}
 
 
 def main():

@@ -5,6 +5,8 @@ import re
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import (Solution, SolutionFolderSettings, SolutionBuildSettings,
                       ProjectType as T, SettingsError, TemplateTools, TypeSettingsData)
 from cppbuild.graph import resolve
@@ -63,16 +65,16 @@ class SolutionFolderTests(unittest.TestCase):
     def test_external_folder_generation(self):
         tests = self.external.add_project("Tests", "Tests", T.TEST)
         plan = workspace.plan(self.solution)
-        top = plan.documents()[self.solution.root / "CppBuildTopLevel.cmake"]
+        top = plan.documents()[self.solution.config_directory / "CppBuildTopLevel.cmake"]
         self.assertNotIn("CPPBUILD_EXTERNAL_FOLDER", top)
         self.assertNotIn("PREDEFINED_TARGETS_FOLDER", top)
         self.configure()
         plan = workspace.plan(self.solution)
         documents = plan.documents()
-        top = documents[self.solution.root / "CppBuildTopLevel.cmake"]
+        top = documents[self.solution.config_directory / "CppBuildTopLevel.cmake"]
         # Set before the linked Solutions are added, so their GoogleTest goes there too.
         self.assertLess(top.index('set(CPPBUILD_EXTERNAL_FOLDER "External")'), top.index("add_subdirectory("))
-        text = documents[tests.root / "CMakeLists.txt"]
+        text = documents[entry_path(tests)]
         self.assertIn('set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "External/CMake")', top)
         self.assertLess(text.index('set(CMAKE_FOLDER "${CPPBUILD_EXTERNAL_FOLDER}/GoogleTest")'), text.index("FetchContent_MakeAvailable"))
         self.assertLess(text.index("FetchContent_MakeAvailable"), text.index('set(CMAKE_FOLDER "${_cppbuild_folder}")'))
@@ -99,7 +101,7 @@ class SolutionFolderTests(unittest.TestCase):
         self.assertEqual(display, {"Unused"})
         self.assertEqual([(p.name, kinds) for p, kinds in plan.external_requests()], [("Lib", ["STATIC"]), ("Unused", ["DISPLAY"])])
         self.assertEqual([folder for _, _, _, folder in plan.linked_solutions()], ["Linked Projects/External"])
-        entry = plan.documents()[self.solution.root / "CMakeLists.txt"]
+        entry = plan.documents()[self.solution.config_directory / "CMakeLists.txt"]
         self.assertIn('set(CMAKE_FOLDER "My Projects/Apps/Tools")', entry)
         self.assertEqual([p.name for p in self.solution.projects()], ["App"])
         self.assertEqual({n.project.name for n in resolve(self.solution.projects())[1]}, {"App", "Lib"})

@@ -81,10 +81,13 @@ class OutputPathTests(unittest.TestCase):
         TemplateTools.create_solution_template(reopened, template)
         self.assertFalse(list(template.rglob("generated.cpp")))
 
-    def test_moving_project_preserves_external_roots_but_changes_cache_identity(self):
+    def test_moving_project_keeps_its_output_area(self):
+        # Relative output directories are relative to the Solution's .cppbuild, and the area belongs
+        # to the Project's settings, which stay there when its files move.
         self.app.set_build_settings(ProjectBuildSettings(artifact_directory="../../work"))
         before = self.app._resolved_build_settings()
         external = output_paths.root(self.app, before.artifact_directory)
+        self.assertEqual(external, (self.solution.config_directory / "../../work").resolve())
         old = output_paths.area(self.app, before.artifact_directory)
         directory = output_paths.claim(self.app, before.artifact_directory)
         (directory / "keep").write_text("old")
@@ -92,7 +95,8 @@ class OutputPathTests(unittest.TestCase):
         self.assertTrue(report.success)
         after = self.app._resolved_build_settings()
         self.assertEqual(output_paths.root(self.app, after.artifact_directory), external)
-        self.assertNotEqual(output_paths.area(self.app, after.artifact_directory), old)
+        self.assertEqual(output_paths.area(self.app, after.artifact_directory), old)
+        self.assertEqual(output_paths.claim(self.app, after.artifact_directory), directory)
         self.assertTrue((directory / "keep").is_file())
 
 
@@ -140,7 +144,8 @@ class OutputBuildScenario:
             success(app.run())
             new_exe = engine.main_artifact(build, "Demo_App", "Debug")
             self.assertNotEqual(exe, new_exe)
-            self.assertTrue(new_exe.is_relative_to(app.root / "new products"))
+            # Relative to the Solution's .cppbuild.
+            self.assertTrue(new_exe.is_relative_to(solution.root / "new products"))
             success(app.clean())
             self.assertFalse(new_exe.exists())
 

@@ -229,7 +229,7 @@ def describe(value):
     """A short identity for CppBuild objects; repr() for everything else."""
     from .core import Project, Solution, ProjectSettings, SolutionSettings
     if isinstance(value, Solution):
-        return f"Solution({str(value.root)!r})"
+        return f"Solution({str(value.config_directory)!r})"
     if isinstance(value, Project):
         return f"Project({value.name!r}, {str(value.root)!r})"
     if isinstance(value, (ProjectSettings, SolutionSettings)):

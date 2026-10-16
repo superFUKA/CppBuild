@@ -22,13 +22,14 @@ class ProjectInfo:
 
 @dataclass(frozen=True)
 class SolutionInfo:
-    root: object
+    root: object  # the base directory
     settings: object
     build_settings: object
     projects: tuple[ProjectInfo, ...]
     last_operation: str | None
     last_success: bool | None
     external_changes_checked: bool = False
+    config_directory: object = None  # the .cppbuild directory
 
 
 def tree_key(project, settings):
@@ -117,4 +118,5 @@ def snapshot(solution):
         result.append(ProjectInfo(project.name, project.root, project.settings.get(),
                                   deepcopy(project._build_settings), project._known_files, project._known_artifacts,
                                   generation, build, *_last(project)))
-    return SolutionInfo(solution.root, solution.settings.get(), deepcopy(solution._build_settings), tuple(result), *_last(solution))
+    return SolutionInfo(solution.root, solution.settings.get(), deepcopy(solution._build_settings), tuple(result), *_last(solution),
+                        config_directory=solution.config_directory)

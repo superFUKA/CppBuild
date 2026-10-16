@@ -26,7 +26,7 @@ class WorkflowTests(unittest.TestCase):
         original = self.root / "class.hpp"
         original.write_text("struct Example { Example() = default; };", encoding="utf-8")
         self.solution.create_file_template("class_header", original, replacements={"class_name": "Example"})
-        material = self.solution.root / self.solution.settings.file_templates()["class_header"]
+        material = self.solution.config_directory / "templates" / self.solution.settings.file_templates()["class_header"]
         self.assertIn("{{class_name}}", material.read_text())
         self.assertIn("Example", original.read_text())
         reopened = Solution.open(self.solution.root / ".cppbuild")

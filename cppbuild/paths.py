@@ -1,20 +1,55 @@
-"""Relative paths on disk, with existing root-relative settings at the API boundary."""
+"""Paths of the management files and the rules for where Projects may be.
+
+A Solution's settings directory (.cppbuild) holds every management and generated file of
+the Solution. On disk, the Solution's paths are relative to that directory; a Project's
+paths are relative to the Project's directory, so moving either touches one entry. At the
+API, the Solution's paths are relative to its base directory (Solution.root) and a
+Project's paths to the Project's directory.
+"""
 from copy import deepcopy
 import os
 from pathlib import Path, PureWindowsPath
 
-from .dependencies import LegacyDependency
 from .models import CMakePackage, CMakeSource, ImportedLibrary, SettingsError
 
-
-TYPE_KINDS = {"static_library", "shared_library", "executable", "interface_library", "header_only", "test"}
+MANAGEMENT = ".cppbuild"
+TYPE_KINDS = {"static_library", "shared_library", "executable", "interface_library", "test"}
 
 
 def relative(base, target):
     try:
         return Path(os.path.relpath(target, base)).as_posix()
     except ValueError as exc:
-        raise SettingsError("Managed paths must be on the same drive/share as their settings file") from exc
+        raise SettingsError(f"{target} must be on the same drive as {base} to be recorded as a relative path") from exc
+
+
+def resolve(base, value):
+    """value (relative to base, or absolute) as an absolute path; it may lie anywhere."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise SettingsError("Expected a nonempty path string")
+    windows = PureWindowsPath(value)
+    if windows.drive and not windows.root:
+        raise SettingsError("Drive-relative paths are not supported")
+    return (Path(base) / value).resolve()
+
+
+def key(path):
+    """A comparable form: Windows paths differ only in case where resolve() kept a given spelling."""
+    return Path(os.path.normcase(str(path)))
+
+
+def inside(path, directory):
+    """path is directory or below it."""
+    return key(path).is_relative_to(key(directory))
+
+
+def overlap(first, second):
+    return inside(first, second) or inside(second, first)
+
+
+def in_management(path):
+    """Whether path is a .cppbuild directory or lies inside one."""
+    return any(part.casefold() == MANAGEMENT for part in Path(path).parts)
 
 
 def project_values(values, convert):
@@ -24,9 +59,7 @@ def project_values(values, convert):
     for kind in values.types.values():
         kind.include_directories = [convert(p) for p in kind.include_directories]
     for dependency in values.dependencies.values():
-        if isinstance(dependency, LegacyDependency) and dependency.solution_directory is not None:
-            dependency.solution_directory = convert(dependency.solution_directory)
-        elif isinstance(dependency, (CMakePackage, CMakeSource)):
+        if isinstance(dependency, (CMakePackage, CMakeSource)):
             dependency.directory = convert(dependency.directory)
         elif isinstance(dependency, ImportedLibrary):
             dependency.locations = {k: convert(p) for k, p in dependency.locations.items()}
@@ -35,14 +68,13 @@ def project_values(values, convert):
 
 
 def rebase(value, before, after, *, stored=False):
+    """value relative to before (or absolute) as a path relative to after."""
     if not isinstance(value, str) or not value or "\x00" in value:
         raise SettingsError("Expected a nonempty path string")
     windows = PureWindowsPath(value)
     if stored and (Path(value).is_absolute() or windows.drive or windows.root):
-        raise SettingsError("Stored paths must be relative to their settings file")
-    if windows.drive and not windows.root:
-        raise SettingsError("Drive-relative paths are not supported")
-    return relative(after, (before / value).resolve())
+        raise SettingsError("Stored paths must be relative")
+    return relative(after, resolve(before, value))
 
 
 def _list(data, key, convert):
@@ -65,7 +97,6 @@ def transform(kind, payload, convert):
         raise SettingsError("Expected settings object")
     if kind == "solution":
         _mapping(data, "projects", convert)
-        _mapping(data, "file_templates", convert)
         _list(data, "dependency_directories", convert)
         references = data.get("references", {})
         if not isinstance(references, dict):
@@ -82,19 +113,13 @@ def transform(kind, payload, convert):
         if not isinstance(dependencies, dict):
             raise SettingsError("dependencies must be a mapping")
         for dependency in dependencies.values():
-            if not isinstance(dependency, dict):
+            if (not isinstance(dependency, dict) or not isinstance(dependency.get("kind"), str)
+                    or not isinstance(dependency.get("values"), dict)):
                 raise SettingsError("Expected dependency object")
-            category = dependency.get("kind", "project")
-            if not isinstance(category, str):
-                raise SettingsError("Expected dependency kind string")
-            values = dependency.get("values", dependency)
-            if not isinstance(values, dict):
-                raise SettingsError("Expected dependency values")
-            if category == "project" and values.get("solution_directory") is not None:
-                values["solution_directory"] = convert(values["solution_directory"])
-            elif category in {"package", "source"} and "directory" in values:
+            values = dependency["values"]
+            if dependency.get("kind") in {"package", "source"} and "directory" in values:
                 values["directory"] = convert(values["directory"])
-            elif category == "imported":
+            elif dependency.get("kind") == "imported":
                 _mapping(values, "locations", convert)
                 _mapping(values, "import_libraries", convert)
                 _list(values, "include_directories", convert)
@@ -103,24 +128,13 @@ def transform(kind, payload, convert):
     return data
 
 
-def root_for(path, kind):
-    return path.parent.parent.parent if kind in TYPE_KINDS else path.parent.parent
+def encode(path, kind, payload, root):
+    """API values (relative to root) as stored values: the Solution's relative to its settings
+    directory, a Project's relative to root, its directory."""
+    after = Path(path).parent if kind == "solution" else root
+    return transform(kind, payload, lambda value: rebase(value, root, after))
 
 
-def encode(path, kind, payload):
-    path = Path(path)
-    root = root_for(path, kind)
-    data = transform(kind, payload, lambda value: rebase(value, root, path.parent))
-    if kind == "project":
-        _mapping(data, "types", lambda value: rebase(value, path.parent / "types", path.parent))
-    return data
-
-
-def decode(path, kind, payload, version, *, root=None):
-    path = Path(path)
-    root = root_for(path, kind) if root is None else Path(root)
-    before = path.parent if version >= 2 else root
-    data = transform(kind, payload, lambda value: rebase(value, before, root, stored=version >= 2))
-    if kind == "project" and version >= 2:
-        _mapping(data, "types", lambda value: rebase(value, path.parent, path.parent / "types", stored=True))
-    return data
+def decode(path, kind, payload, root):
+    before = Path(path).parent if kind == "solution" else root
+    return transform(kind, payload, lambda value: rebase(value, before, root, stored=True))

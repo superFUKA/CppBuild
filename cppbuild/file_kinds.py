@@ -4,8 +4,8 @@ from pathlib import Path
 from . import cmake_files, output_paths
 from .git_sources import FETCHING
 from .models import FileKind, SettingsError
+from .paths import MANAGEMENT
 
-MANAGEMENT = ".cppbuild"
 # Below a .cppbuild directory: the default output root and the operation locks.
 LOCAL_DIRECTORIES = {"output", "operations"}
 WRITE_LOCK = ".write.lock"
@@ -40,7 +40,7 @@ def restorable(path):
         if parent.name == MANAGEMENT:
             inside = path.relative_to(parent).parts
             return inside[0] not in LOCAL_DIRECTORIES
-    return path.name in {cmake_files.ENTRY, cmake_files.TOP_LEVEL}
+    return False
 
 
 def kind(solution, path):
@@ -50,12 +50,13 @@ def kind(solution, path):
         return FileKind.FETCHED
     if path.name == WRITE_LOCK or any(output_paths.generated_directory(p) for p in (path, *path.parents)):
         return FileKind.OUTPUT
+    # The generated CMake files are inside .cppbuild, beside the management files.
+    if cmake_files.generated_file(path):
+        return FileKind.GENERATED
     for parent in (path, *path.parents):
         if parent.name == MANAGEMENT:
             inside = path.relative_to(parent).parts
             if inside and inside[0] in LOCAL_DIRECTORIES:
                 return FileKind.OUTPUT
             return FileKind.MANAGED
-    if cmake_files.generated_file(path):
-        return FileKind.GENERATED
     return None

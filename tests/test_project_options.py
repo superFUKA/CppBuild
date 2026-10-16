@@ -9,6 +9,8 @@ import struct
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import (BuildOption, CMakeSettings, ProjectBuildSettings, ProjectType as T, SettingsError, Solution,
                       SolutionBuildSettings)
 from cppbuild import engine, generators, workspace
@@ -45,8 +47,8 @@ class SettingsTests(unittest.TestCase):
                                                     {"value": "/arch:AVX2", "compiler": "MSVC", "configuration": "Release"}])
         self.assertEqual(saved["build_events"], {"pre_build": [["cmake", "-E", "echo", "before"]], "post_build": [["tool", "a b"]]})
         self.assertEqual((saved["warning_level"], saved["warnings_as_errors"]), (4, True))
-        # Paths are stored relative to the settings file, like every other Project path.
-        self.assertEqual(saved["output_files"], ["../data/config.json", "../assets"])
+        # Paths are stored relative to the Project's directory, like every other Project path.
+        self.assertEqual(saved["output_files"], ["data/config.json", "assets"])
         data = Solution.open(self.solution.root / ".cppbuild").get_project("App").settings.get()
         self.assertEqual(data.compile_options[1], BuildOption("/arch:AVX2", "MSVC", "Release"))
         self.assertEqual(data.conditional_definitions, [BuildOption("APP_DEBUG", None, "Debug"), BuildOption("ALWAYS=1")])
@@ -87,7 +89,7 @@ class SettingsTests(unittest.TestCase):
         settings.set_build_events(pre_link=[["cmake", "-E", "echo", "${NOT_EXPANDED}"]])
         settings.set_output_files(["data"])
         self.lib.settings.set_link_options(["/IGNORED"])
-        app = self.documents()[self.app.root / "CMakeLists.txt"]
+        app = self.documents()[entry_path(self.app)]
         self.assertIn('target_compile_options(Demo_App PRIVATE '
                       '"$<$<OR:$<COMPILE_LANG_AND_ID:C,MSVC>,$<COMPILE_LANG_AND_ID:CXX,MSVC>>:/DGT=(2$<ANGLE-R>1)>" '
                       '"$<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<CONFIG:Release>>:-O2>" "$<$<COMPILE_LANGUAGE:C,CXX>:/MP>")', app)
@@ -97,16 +99,16 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('"$<$<COMPILE_LANGUAGE:C,CXX>:-Wall;-Wextra>"', app)
         self.assertIn('add_custom_command(TARGET Demo_App PRE_LINK\n  COMMAND "cmake" "-E" "echo" [=[${NOT_EXPANDED}]=]', app)
         self.assertIn("add_custom_target(Demo_App_files ${_cppbuild_copy} VERBATIM)\nadd_dependencies(Demo_App Demo_App_files)", app)
-        lib = self.documents()[self.lib.root / "CMakeLists.txt"]
+        lib = self.documents()[entry_path(self.lib)]
         self.assertNotIn("target_link_options(Demo_Lib ", lib)  # a static library has no link step
         self.assertIn("target_link_options(Demo_Lib_shared PRIVATE", lib)
-        top = self.documents()[self.solution.root / "CppBuildTopLevel.cmake"]
+        top = self.documents()[self.solution.config_directory / "CppBuildTopLevel.cmake"]
         self.assertNotIn("CMAKE_MSVC_RUNTIME_LIBRARY", top)
         self.solution.settings.set_msvc_runtime("static")
         self.assertEqual(json.loads(self.solution.settings.path.read_text())["data"]["msvc_runtime"], "static")
-        top = self.documents()[self.solution.root / "CppBuildTopLevel.cmake"]
+        top = self.documents()[self.solution.config_directory / "CppBuildTopLevel.cmake"]
         self.assertIn('set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")', top)
-        entry = self.documents()[self.solution.root / "CMakeLists.txt"]
+        entry = self.documents()[self.solution.config_directory / "CMakeLists.txt"]
         self.assertIn("project(Demo LANGUAGES C CXX)", entry)
         self.assertIn("_cppbuild_module_scanning()", entry)
 

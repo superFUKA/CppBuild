@@ -1,5 +1,20 @@
 # 実装・検証記録
 
+## 2026-10-17 Solutionにつき1つの.cppbuildと自由な配置
+
+- 依頼：`.cppbuild` をSolutionにつき1つにし、生成するCMakeファイルもそこにまとめ、`.cppbuild` もソースもどこに置けるようにする。基準ディレクトリを `.cppbuild` で設定できるようにする。ドライブをまたぐ場合はエラー。依存探索を配置が自由でも機能させる。互換性は考慮しない（旧形式の移行・読み込みはなし）。既存のサンプル・試験は作り直す。設計と破綻チェックは[配置変更の設計](SOLUTION_LAYOUT_PLAN.md)、実装中に決めた点は[設計整理メモ](DESIGN_NOTES.md)冒頭、使い方は[利用手順](USAGE.md)の「Solutionの配置」。
+- 配置：Solutionの設定は `.cppbuild/project.json`（`.cppbuild` 基準の相対パス、基準ディレクトリが既定以外なら `base_directory`）、Projectの設定は `.cppbuild/projects/<名前>/project.json` と `types/`（Projectのディレクトリ基準）。生成ファイルは `.cppbuild/CMakeLists.txt`・`CppBuildTopLevel.cmake`・`projects/<名前>/CMakeLists.txt`。Projectのファイルは `get_filename_component(... ABSOLUTE)` でProjectのディレクトリを求め、ソース・include・PCH・作業ディレクトリ・ビルドイベント・出力へのコピー・モジュール・外部依存をそこから指す。ビルドツリー内のProjectのディレクトリは従来どおり `<ツリー>/<Project名>`。schema_version=5、`CPPBUILD_FORMAT`=2。ロックはSolutionの `.cppbuild/operations` だけ。
+- API：`Solution.create(..., base_directory=)`、`solution.config_directory`、`set_base_directory`、`move_config`、`move_project(..., move_files=)`、`SolutionInfo.config_directory`。`remove_project` は設定を削除する。`file_templates` の値は `templates/` からの名前。`artifact_directory` の相対パスはSolutionの `.cppbuild` 基準。`create_solution_template` は新しいテンプレートの `.cppbuild` を返す。
+- 規則：Projectは `.cppbuild` の中に置けない。ソースディレクトリの重なり（同じSolutionのProjectどうし、依存探索ディレクトリとの間）は保存時にエラー。別のSolutionと同じディレクトリは使えるが、1回のビルドに両方が入るとエラー。Project名は大文字小文字を区別せずに重複を検査。`link_git` はリンク先のProjectがリポジトリの外ならエラー。依存探索は再帰的（入れ子の依存を除く、`build` に入りCMakeのビルドツリーを除く）。
+- 削除：旧形式（schema 1〜4）の読み込みと自動移行（`LegacyDependency`、名前付き参照、`header_only`、`needs_migration`）、Projectの移動でのキャッシュ退避（`.cppbuild/relocations`）。
+- 実装中に見つけて直した問題：
+  - **CMakeのクラッシュ**：最初は `cmake_path(SET ... NORMALIZE ...)` でProjectのディレクトリを求めたが、CMake 4.2.3がWindowsで非ASCIIのパスに対して `0xC0000409` で落ちることを利用シナリオ（日本語のパス）で検出し、最小の再現で確認した。`get_filename_component(... ABSOLUTE)` に変えた（日本語のパスで `..` が畳まれ、末尾の `/` も付かないことを確認）。実ビルドの試験 `test_layout` を日本語のパスにした。
+  - **パス長**：ビルドツリー内のProjectのディレクトリを一度 `<ツリー>/projects/<名前>` にしたところ、TEMPの下の日本語のパスで外部CMakeソースのビルドが `MSB6003`（パスが長い）で失敗した。`add_subdirectory` にビルド先 `<名前>` を渡し、従来の長さに戻した。
+  - 依存探索が `build` という名前のディレクトリに入らず、`repo/build/cppbuild/.cppbuild` が見つからなかった（試験で検出）。
+- 試験：新規 `tests/test_layout.py`（単体18件：基準ディレクトリの記録・既定では書かないこと、外側のProjectと何も書かないこと、`.cppbuild` を含むProject、`set_base_directory`、共有ソースの許可と同時ビルドの拒否、ドライブ越えの拒否、`move_config` 2件、記録だけの移動、基準外への移動、テンプレートでの `.cppbuild` の位置と基準外のProjectの拒否、探索6件（深い位置、入れ子の依存の除外、外向きの探索ディレクトリ、ビルドツリーと `build`、除外名、同じSolutionの2つのコピー）、見つからない依存。実ビルド3件：日本語のパスで基準外のライブラリをリンク・実行、`.cppbuild` だけから素のcmakeで構成・ビルド・実行、`move_config` 後の実行）。`test_git_sources` にリポジトリの奥の `.cppbuild` と、外側にProjectがあるリンク先の拒否を追加。旧形式の移行の試験15件を削除し（1件は旧schemaを拒否する試験に書き換え）、既存の試験を新しい配置に合わせた（生成ファイルの場所、保存するパスの基準、ロック、`remove_project`、出力領域、素のcmakeの `-S`）。
+- サンプル：`examples/free_layout.py` を追加（`build/cppbuild/.cppbuild` からリポジトリの `src/` をビルド）。既存の例はAPIが変わらないためそのまま動く。保存済みの旧形式のSolutionはリポジトリになかった。利用シナリオに `layout`（8件目）を追加し、`templates`・`standalone` を新しい配置に合わせた。
+- 検証：全292件成功（VS2022・VS2026・Ninjaの実ビルド、skipなし、859.0秒）。利用シナリオ8件が3生成器で全PASS（`.test-work/usage-final-vs2022b`、`usage-final-NinjaMultiConfig`、`usage-final-VisualStudio182026`）。Linux/macOS、VS上のF5操作は未実施。未コミット。
+
 ## 2026-10-16 詳細ログ
 
 - 依頼：AIが読んで問題を解決できるよう、いろいろな操作で詳細なログを残す設定。有効・無効とレベルを設定できること。

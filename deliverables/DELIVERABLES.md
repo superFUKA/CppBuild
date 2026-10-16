@@ -10,6 +10,8 @@
 
 実装開始後の追加資料：
 
+- [SOLUTION_LAYOUT_PLAN.md](SOLUTION_LAYOUT_PLAN.md)：`.cppbuild` をSolutionごとに1つにし、`.cppbuild`・ソースの配置を自由にする変更の設計と破綻チェック（2026-10-17）。未実装・判断事項はユーザー確認待ち。
+
 - [CMAKE_WRAPPER_REVIEW_2026-10-03.md](CMAKE_WRAPPER_REVIEW_2026-10-03.md)：CMakeラッパーとしての責務と独自実装の評価。公式仕様との照合、標準機能へ寄せられる箇所、簡素化に仕様判断が必要な箇所。
 
 - [DESIGN_REVIEW_FOLLOWUP_2026-10-03.md](DESIGN_REVIEW_FOLLOWUP_2026-10-03.md)：`6979cf6` 実装後の設計レビュー。基本方針の評価と、操作内の設定固定・状態管理・全体／個別操作の共通化に残る課題。静的レビューのみ。

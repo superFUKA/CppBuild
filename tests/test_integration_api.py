@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 import cppbuild
 from cppbuild import (AlreadyRegisteredError, CMakePackage, FileKind, InvalidValueError, NoMainProjectError,
                       NotRegisteredError, ProjectBuildSettings, ProjectType as T, SettingsError, Solution,
@@ -108,18 +110,18 @@ class IntegrationApiTests(unittest.TestCase):
         output = self.solution.root / ".cppbuild/output/intermediate/0123456789"
         output.mkdir(parents=True)
         (output / ".cppbuild-output.json").write_text("{}")
+        # Every file CppBuild writes is in .cppbuild; the Projects' directories hold only their own files.
         kinds = {
-            "CMakeLists.txt": FileKind.GENERATED, "CppBuildTopLevel.cmake": FileKind.GENERATED,
-            "App/CMakeLists.txt": FileKind.GENERATED, ".cppbuild/project.json": FileKind.MANAGED,
-            "Lib/.cppbuild/project.json": FileKind.MANAGED, ".cppbuild/output": FileKind.OUTPUT,
+            ".cppbuild/CMakeLists.txt": FileKind.GENERATED, ".cppbuild/CppBuildTopLevel.cmake": FileKind.GENERATED,
+            ".cppbuild/projects/App/CMakeLists.txt": FileKind.GENERATED, ".cppbuild/project.json": FileKind.MANAGED,
+            ".cppbuild/projects/Lib/project.json": FileKind.MANAGED, ".cppbuild/output": FileKind.OUTPUT,
             ".cppbuild/output/intermediate/0123456789/CMakeCache.txt": FileKind.OUTPUT,
             ".cppbuild/operations/.write.lock": FileKind.OUTPUT, ".cppbuild/.write.lock": FileKind.OUTPUT,
-            "App/src/main.cpp": None, "App/.cppbuild/types": FileKind.MANAGED,
+            "App/src/main.cpp": None, ".cppbuild/projects/App/types": FileKind.MANAGED, "App/CMakeLists.txt": None,
         }
         for path, expected in kinds.items():
             with self.subTest(path=path):
                 self.assertEqual(self.solution.file_kind(path), expected)
-        self.assertEqual(self.solution.file_kind(self.solution.root / "App/CMakeLists.txt"), FileKind.GENERATED)
         # A CMakeLists.txt someone wrote is not CppBuild's.
         (self.solution.root / "notes").mkdir()
         (self.solution.root / "notes/CMakeLists.txt").write_text("project(Mine)\n")
@@ -231,8 +233,8 @@ class IntegrationApiTests(unittest.TestCase):
             ("source added", lambda: self.lib.add_file("src/more.cpp", content="int more() { return 2; }\n", auto_update=False)),
             ("setting saved", lambda: self.app.settings.set_warnings(4)),
             ("build setting", lambda: self.solution.set_build_settings(SolutionBuildSettings(cpp_standard=17))),
-            ("generated file edited", lambda: (self.app.root / "CMakeLists.txt").write_bytes(
-                (self.app.root / "CMakeLists.txt").read_bytes() + b"# edited\n")),
+            ("generated file edited", lambda: (entry_path(self.app)).write_bytes(
+                (entry_path(self.app)).read_bytes() + b"# edited\n")),
             ("build tree removed", lambda: next((self.solution.root / ".cppbuild/output").rglob("CMakeCache.txt")).unlink()),
         )
         for name, change in changes:

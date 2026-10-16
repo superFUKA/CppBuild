@@ -41,15 +41,15 @@ python -m usage_tests.run --scenario lifecycle --generator "Ninja Multi-Config" 
 | `execution` | First/Failure/Last。空白を含む引数、終了コード7の検出、指定順・失敗時停止／継続、並列・非同期実行とwait、Project単独の非同期実行、ToolSettingsの環境変数が実行プログラムへ届くこと。 |
 | `templates` | Original/Template/Restored。ファイル素材作成・置換展開・別名登録・登録解除、イベントによる追加ファイル生成、再帰通知抑止、before/after通知・解除、Solutionテンプレートからの復元と実行、生成物／非保存設定の除外。 |
 | `testing` | 共有LibraryとPassing/Failing/Empty。GoogleTest/CTest、Debug/Release、成功・skip・意図的な失敗・0件、全体テストの選択と停止／継続、個別testの独立性、修正後の再テスト、全体.sln経由のビルド。 |
-| `standalone`（2026-10-01追加） | ECSと依存探索ディレクトリのSTL（各テストProject付き）。CppBuildで全体テストした後、生成したCMakeファイルの安定性・絶対パスなしを確認し、`.cppbuild`を除いて別の場所へコピーして、素のcmakeだけでECSとSTLそれぞれを構成・ビルド・CTest・実行する。 |
+| `standalone`（2026-10-01追加、10-17更新） | ECSと依存探索ディレクトリのSTL（各テストProject付き）。CppBuildで全体テストした後、生成したCMakeファイルの安定性・絶対パスなし・すべて`.cppbuild`の中にあることを確認する。管理ファイル（`project.json`・`types/`・`templates/`）とビルドツリーを除いて別の場所へコピーし、素のcmakeだけで（`-S <コピー>/.cppbuild`）ECSとSTLそれぞれを構成・ビルド・CTest・実行する。 |
+| `layout`（2026-10-17追加） | `.cppbuild`とソースの自由な配置。リポジトリの`sln/App`に置いた`.cppbuild`（基準ディレクトリはリポジトリ）から`src/`のProjectをビルド・実行し、ソース側にCppBuildのファイルがないことを確認する。依存探索ディレクトリの奥（`deps/Vendor/build/cppbuild`）にある別SolutionのVendorをリンクする。別のSolution（`sln/Tools`）が同じ`src/core`を使ってビルドする。手で移したProjectの記録の付け替え（`move_files=False`）、`.cppbuild`の移動（`move_config`）の後の実行と再open、ソースディレクトリが重なるProjectの拒否、移動後の`.cppbuild`から素のcmakeでの構成・ビルド・実行。 |
 
 ## 結果の読み方
 
 - `summary.json`：シナリオ別成否、所要時間、記録した操作・確認の数。
 - 各シナリオの`steps.json`：操作結果、コマンド、終了コード、ビルド／実行出力、テストケースなど。
 - 予期しない失敗時の`failure.txt`：Pythonのトレースバック。
-- 各Solution／Projectの`CMakeLists.txt`・`CppBuildTopLevel.cmake`：生成したCMakeファイル（2026-10-01以降）。
-- 各Solution／Projectの`.cppbuild/`：保存設定。Solutionの`.cppbuild/output/`にビルドツリー（VS生成物・ビルド成果物）。
+- 各Solutionの`.cppbuild/`：保存設定（`project.json`、Projectごとの`projects/<名前>/`）と生成したCMakeファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`・`projects/<名前>/CMakeLists.txt`）。`.cppbuild/output/`にビルドツリー（VS生成物・ビルド成果物）。2026-10-17以降、Projectのディレクトリにはソースだけがある。
 
 コンパイルエラー、終了コード7、GoogleTestの失敗・0件は意図的に発生させるケースです。それらが正しく失敗として返されることを確認できればシナリオはPASSになります。最後の終了コードは全シナリオ成功なら0、予期しない失敗があれば1です。一つのシナリオが失敗しても残りは実行します。
 

@@ -1,25 +1,78 @@
 # 利用手順
 
-<a id="generated-cmake"></a>
+<a id="solution-layout"></a>
 
-## 生成するCMakeファイルとCppBuildなしでのビルド（2026-10-01）
+## Solutionの配置：Solutionにつき1つの`.cppbuild`（2026-10-17）
 
-CppBuildは、Solutionとそのリンク先を1つのCMakeプロジェクトとして生成する。生成したファイルはソースツリーに置き、コミットして配布できる。CppBuild・Python・`.cppbuild`のJSONがなくても、CMakeだけで構成・ビルド・.sln生成・実行・テストができる。
+Solutionの設定とCppBuildが生成するCMakeファイルは、すべてそのSolutionの`.cppbuild`ディレクトリにある。Projectのディレクトリにはソースだけがあり、CppBuildは何も書かない。`.cppbuild`もProjectもどこに置いてもよい（同じドライブの中）。設計と判断の経緯は[配置変更の設計](SOLUTION_LAYOUT_PLAN.md)。
 
 ```text
-ECS/                              # Solution
-  CMakeLists.txt                  # 生成：入口。所属Projectを add_subdirectory する
-  CppBuildTopLevel.cmake          # 生成：ECSを最上位にしたときの既定値とリンク先Solution
-  App/CMakeLists.txt              # 生成：Projectの定義（ソースディレクトリ・include・定義・リンク）
-  Core/CMakeLists.txt
-  deps/STL/CMakeLists.txt         # リンク先Solution（STL自身の生成ファイル）
-  deps/STL/Containers/CMakeLists.txt
+repo/
+  src/app/...                         # Project App のディレクトリ（ソースだけ）
+  src/core/...
+  sln/MyApp/.cppbuild/                # Solution MyApp
+    project.json                      # Solutionの設定（kind=solution）
+    CMakeLists.txt                    # 生成：入口（cmake -S repo/sln/MyApp/.cppbuild）
+    CppBuildTopLevel.cmake            # 生成
+    projects/App/project.json         # Project Appの設定
+    projects/App/types/*.json         # 種類別の設定
+    projects/App/CMakeLists.txt       # 生成：Projectの定義
+    templates/                        # 共有素材
+    output/  operations/              # ビルドツリーとロック（コミットしない）
+```
+
+```python
+from cppbuild import ProjectType, Solution
+
+# repo/sln/MyApp/.cppbuild を作る。基準ディレクトリ（APIに渡す相対パスの基準）はリポジトリのルート
+solution = Solution.create("repo/sln/MyApp", "MyApp", base_directory="../..")
+core = solution.add_project("src/core", "Core", ProjectType.STATIC_LIBRARY)   # repo/src/core
+app = solution.add_project("src/app", "App", ProjectType.EXECUTABLE)
+vendor = solution.add_project("D:/work/vendor", "Vendor", ProjectType.STATIC_LIBRARY)  # 絶対パス（同じドライブ）も可
+
+solution.root               # 基準ディレクトリ（repo）
+solution.config_directory   # repo/sln/MyApp/.cppbuild
+solution.set_base_directory("src")          # 基準だけを変える（何も動かさない）
+solution.move_config("build/solutions/MyApp")  # .cppbuild を移す（記録したパスの指す先は変わらない）
+solution.move_project("App", "apps/app")       # Projectのディレクトリをファイルごと移す
+solution.move_project("Core", "libs/core", move_files=False)  # git mv 等で移した後、記録だけ付け替える
+```
+
+- **基準ディレクトリ**（`base_directory`、既定は`.cppbuild`の親）：APIに相対パスで渡すときの基準（`add_project`・`move_project`・`file_kind`・`create_file_template` など）と、テンプレートでコピーする範囲。`Solution.create(..., base_directory=)` で`.cppbuild`を作る場所からの相対（または絶対）で指定し、Solutionの`project.json`に`.cppbuild`からの相対で保存する（既定のときは書かない）。Projectを置ける範囲は制限しない。
+- **保存するパス**：Solutionの`project.json`は`.cppbuild`からの相対、Projectの`project.json`・種類別の設定はProjectのディレクトリからの相対（APIで渡す値と同じ）。`.cppbuild`を動かしても、Projectを動かしても、書き換わるのはSolutionの記録だけ。ドライブをまたぐパスは相対にできないため、エラー。
+- **生成ファイル**：入口は`.cppbuild/CMakeLists.txt`。Projectのファイル（`.cppbuild/projects/<名前>/CMakeLists.txt`）は、先頭で自分の位置からProjectのディレクトリを求め（`_cppbuild_project_dir`）、ソース・include・作業ディレクトリ等をそこから指す。CppBuildなしで使うときは `cmake -S <...>/.cppbuild -B <ビルド先>`。VS・VS Codeの「フォルダーを開く」では`.cppbuild`を開く。生成形式の版（`CPPBUILD_FORMAT`）は2。
+- **配置の規則**：
+  - Projectのディレクトリは、どの`.cppbuild`の中にも置けない。Projectのディレクトリが`.cppbuild`を含むのはよい（例：`add_project(".", ...)` で基準ディレクトリそのものをProjectにし、`source_directories = ["."]`）。走査は`.cppbuild`という名前のディレクトリに入らない。
+  - 1つのファイルは1つのProjectに属する。同じSolutionのProjectどうしでソースディレクトリ（`source_directories`）が同じか入れ子なら、保存時にエラー。Projectのディレクトリが同じでも、ソースディレクトリが分かれていればよい（既定の `["src", "include"]` のまま同じディレクトリに2つ置くとエラーになるので、指定する）。
+  - 依存探索ディレクトリとソースディレクトリが重なるのもエラー（cloneしたリンク先をソースとして集めてしまうため）。
+  - 別のSolutionと同じディレクトリをProjectにしてよい（例：`sln/App`と`sln/Tools`が同じ`src/core`を使う）。ただし両方が1回のビルドに入る場合（リンクで取り込む場合）は、同じソースを2回コンパイルすることになるので、計画の時点でエラー。
+  - Project名は大文字小文字の違いだけでは区別しない（`projects/<名前>`が衝突するため）。
+- **`remove_project`**：Projectの設定（`.cppbuild/projects/<名前>/`）を削除する。Projectのディレクトリのファイルは残す。`transaction()` の中なら戻せる。
+- **`move_config(destination, *, keep_base=True)`**：`.cppbuild`の管理ファイルを`destination/.cppbuild`へ移し、記録したパスを書き直す。生成ファイルは新しい場所で次の操作のときに書き直す。`output/`（ビルドツリー）と`operations/`は元の場所に残すので、不要なら手で消す。`keep_base=False`なら基準ディレクトリも`.cppbuild`と一緒に動く。ほかのSolutionからこのSolutionへの記録（`link_solution`の参照）は追従しない。
+- **`move_project(..., move_files=True)`**：Projectのディレクトリを移す（移動先は基準ディレクトリからの相対か絶対で、まだ存在しない場所）。Projectの設定は`.cppbuild`に残る。ディレクトリがまだない（ファイルを1つも作っていない）Projectは記録だけを移す。`.cppbuild`を含むディレクトリは移せないので、自分で移して`move_files=False`を使う。同じディレクトリを使う別のSolutionは追従しない。
+- **テンプレート**：基準ディレクトリのツリーを丸ごとコピーし、`.cppbuild`はツリー内の同じ位置に置く。`.cppbuild`と全Projectが基準ディレクトリの中にないとエラー。`create_solution_template` は新しいテンプレートの`.cppbuild`を返し、`Solution.create(destination, name, template=...)` はテンプレートの基準ディレクトリの中身を`destination`に展開する。
+- **旧形式**：以前の形式（Projectごとに`.cppbuild`があった schema 4 以前）は読まない（`Unsupported schema` のエラー）。移行の処理はない。新しいCppBuildで作り直す。
+
+<a id="generated-cmake"></a>
+
+## 生成するCMakeファイルとCppBuildなしでのビルド（2026-10-01、10-17更新）
+
+CppBuildは、Solutionとそのリンク先を1つのCMakeプロジェクトとして生成する。生成したファイルは`.cppbuild`の中に置き、コミットして配布できる。CppBuild・Python・`.cppbuild`のJSONがなくても、CMakeだけで構成・ビルド・.sln生成・実行・テストができる。
+
+```text
+ECS/.cppbuild/                     # Solution ECS
+  CMakeLists.txt                   # 生成：入口。所属Projectを add_subdirectory する
+  CppBuildTopLevel.cmake           # 生成：ECSを最上位にしたときの既定値とリンク先Solution
+  projects/App/CMakeLists.txt      # 生成：Projectの定義（ディレクトリ・ソースディレクトリ・include・定義・リンク）
+  projects/Core/CMakeLists.txt
+ECS/deps/STL/.cppbuild/CMakeLists.txt                  # リンク先Solution（STL自身の生成ファイル）
+ECS/deps/STL/.cppbuild/projects/Containers/CMakeLists.txt
 ```
 
 CppBuildなしで使う例（生成器・コンパイラ・アーキテクチャは利用者が選ぶ）：
 
 ```powershell
-cmake -S ECS -B build -G "Visual Studio 17 2022" -A x64
+cmake -S ECS/.cppbuild -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ctest --test-dir build -C Release
 build/bin/Release/App.exe
@@ -28,7 +81,7 @@ build/bin/Release/App.exe
 - **生成のタイミング**：update・build・rebuild・run・testのたびに、操作するSolutionの生成ファイルを書き直す（内容が同じなら書き換えない）。clean・設定の保存だけでは生成しない。ファイルの追加・設定変更の後は、これらの操作で反映する。
 - **生成ファイルの性質**：先頭行が `# Generated by CppBuild` で、手で編集しない。パスはすべて相対パス。内容は管理JSONだけで決まり（2026-10-12更新：ソースファイルの一覧は含まない）、生成器・コンパイラ・アーキテクチャ・構成などの保存しない設定や、PCごとのパスを含まない。同じ入力からは毎回同じ内容になる。
 - **ソースファイルの収集**（2026-10-12更新）：生成ファイルにはソースファイルを1つずつ書かず、Projectの `source_directories` だけを書く。ファイルはCMakeが構成のたびに集め（Solutionの `CMakeLists.txt` の `_cppbuild_collect_sources`）、ファイルの追加・削除・改名では生成ファイルは変わらない。`CONFIGURE_DEPENDS` により、CppBuildなしの `cmake --build`（VSのビルドを含む）でも、次のビルドで追加・削除に気づいて構成し直す。集める範囲はCppBuildの走査と同じで、拡張子に関係なくすべてのファイル（隠しファイルを含む）を集め、`.cppbuild`・`.git`・`build`・`__pycache__`・`.cache`・`.venv` という名前のディレクトリ、CppBuildの出力先、シンボリックリンク・ジャンクション、CppBuildが生成した `CMakeLists.txt`・`CppBuildTopLevel.cmake` は除く。`.cpp`・`.cc`・`.cxx`（大文字小文字を問わない）だけをコンパイルし、ほかはVSに表示するだけ。フィルタはディレクトリ構成から作る（`source_group(TREE)`）。名前に `;` を含むファイルはCMakeのリストで扱えないため、従来どおりエラー。何も変わっていないビルドでも毎回ディレクトリを確認するため、実測で1回あたりNinjaで約0.02〜0.03秒、VS2022で約0.06〜0.08秒増える（2,001ファイル・102ディレクトリでも同程度）。VSで開いたまま追加してビルドすると、構成し直した後にプロジェクトの再読み込みを求められることがある。
-- **既存ファイルの保護**：Project・Solutionのディレクトリに、CppBuildが生成していない `CMakeLists.txt` があると、上書きせずエラーにする。Projectの `CMakeLists.txt` はファイル操作APIで追加・削除できない。2026-10-03更新：書き込む前に全ファイルを確認し、1つでも該当があれば何も書かない（エラーに該当パスをすべて示す）。書き込み途中で失敗した場合は、書き換えたファイルを元に戻す。ソース走査・テンプレートの対象からも除外する。
+- **既存ファイルの保護**：`.cppbuild`の生成ファイルの場所に、CppBuildが生成していない `CMakeLists.txt` があると、上書きせずエラーにする。2026-10-17更新：Projectのディレクトリには生成しないので、そこに自分の `CMakeLists.txt` を置いてもよい（ほかのファイルと同じく集められる）。2026-10-03更新：書き込む前に全ファイルを確認し、1つでも該当があれば何も書かない（エラーに該当パスをすべて示す）。書き込み途中で失敗した場合は、書き換えたファイルを元に戻す。ソース走査・テンプレートの対象からも除外する。
 - **ターゲット名**：`<Solution名>_<Project名>`（例 `ECS_App`）。成果物のファイル名はProject名のまま（`App.exe`、`Core.lib`）。手書きのCMakeからは別名 `<Solution名>::<Project名>`（例 `STL::Containers`）でリンクできる。CppBuild同士のリンクは `<Solution名>::<Project名>_<形式>`（例 `STL::Containers_static`）を使う。別のSolution・Projectが同じターゲット名になる場合や、同名の共有ライブラリが2つある場合はエラー。2026-10-03更新：検査は、CppBuildなしで切り替えられる形式も含めたすべてのターゲット名（例：共有ライブラリ `Lib` の静的版 `S_Lib_static` と、Project `Lib_static`）と別名に広げた。CMake・GoogleTestが定義する名前（`ZERO_CHECK`、`gtest_main` など）になる場合もエラー。実行ファイル・TESTと同名の共有ライブラリを一緒にビルドする場合も、`bin/<構成>` の `App.pdb`・`App.ilk` を上書きし合うためエラー（IDE表示だけのものは出力先が別なので対象外）。
 - **最上位での既定値**（`CppBuildTopLevel.cmake`、`-D` で上書き可）：単一構成の生成器では `CMAKE_BUILD_TYPE=Debug`、`CMAKE_CXX_STANDARD=20`、実行ファイルとDLLは `<ビルドディレクトリ>/bin/<構成>` にまとめて出す（DLLが実行ファイルの横に置かれる）。`enable_testing()` も行う。
 - **Visual Studioの起動対象**（F5で開始するProject）：Solutionの `CMakeLists.txt` が `VS_STARTUP_PROJECT` を設定する。候補の順は、`main_project` が実行ファイル・TESTならそれ、次に実行ファイル（Project名順）、次にTEST（Project名順）で、そのうち構成されたターゲットの最初を選ぶ（`BUILD_TESTING=OFF` ならTESTは飛ばす）。実行できるProjectがなければ設定しない。そのSolutionの .sln／.slnx だけに効き、リンク先Solutionのプログラムは候補にしない。従来は設定がなく、.slnの先頭の ALL_BUILD が起動対象になって「プログラムを開始できません」になっていた。起動対象はVS上で変更でき、その選択はVSの `.vs` に保存されるため、以後の再生成では変わらない。2026-10-12追加。同日追加：実行ファイル・TESTのデバッグ時の作業ディレクトリ（`VS_DEBUGGER_WORKING_DIRECTORY`）をProjectのディレクトリにする。CppBuildの `run` とテストの探索と同じ場所で、相対パスでファイルを読むプログラムがF5でも同じように動く（従来はVSの既定でビルドツリー側のフォルダーだった）。`run` が `artifact_directory` のDLLのためにPATHへ足すディレクトリは、保存しない設定で決まるため生成ファイルには入れない。
@@ -62,7 +115,7 @@ project.set_build_settings(ProjectBuildSettings(artifact_directory="D:/CppBuild/
 - **ビルドツリー**：Solutionごと・生成環境（生成器・アーキテクチャ・ツールセット・コンパイラ・ツールチェーン）ごとに1つ。`SolutionBuildSettings.intermediate_directory`（既定 `output/intermediate`、Solutionの`.cppbuild`基準）の下の10桁の識別子のディレクトリ。Debug／Release等は同じツリーで扱う。ライブラリの形式もツリーを分けない。
 - **全体と個別**：個別操作（Project.update/build/run/test/clean/rebuild）も同じツリーで、そのProjectのターゲットだけをビルドする。CMakeが依存先を必要に応じてビルドし、全体と個別で同じ成果物を使う。構成（configure）は常にSolution全体で行うため、他ProjectのCMakeの誤りで個別操作も失敗する。
 - **Projectの個別の生成環境**：Projectに別の生成器・アーキテクチャ等を指定すると、その環境のSolutionツリーで全体を構成し、そのProjectをビルドする。
-- **成果物の出力先**：`ProjectBuildSettings.artifact_directory`（既定 `None`）。`None` ではCMakeの既定の配置（実行ファイル・DLLは `<ツリー>/bin/<構成>`、静的ライブラリ等は各Projectのビルドディレクトリ）。指定するとそのProjectの成果物を `<指定先>/<識別子>/<構成>` に出す。相対パスはProjectの`.cppbuild`基準。DLLを別の場所に出した場合でも、CppBuildのrun・testは`PATH`にそのディレクトリを加える。
+- **成果物の出力先**：`ProjectBuildSettings.artifact_directory`（既定 `None`）。`None` ではCMakeの既定の配置（実行ファイル・DLLは `<ツリー>/bin/<構成>`、静的ライブラリ等は各Projectのビルドディレクトリ）。指定するとそのProjectの成果物を `<指定先>/<識別子>/<構成>` に出す。相対パスはSolutionの`.cppbuild`基準（2026-10-17更新：以前はProjectの`.cppbuild`基準）。DLLを別の場所に出した場合でも、CppBuildのrun・testは`PATH`にそのディレクトリを加える。
 - **廃止**：`ProjectBuildSettings.intermediate_directory` はなくなった（渡すと `TypeError`）。Projectごとの`.cppbuild/output`は使わない。
 - どちらも非保存で、再open後は既定値に戻る。set_build_settingsは設定全体の置き換え。
 - 所有マーカーのない既存ディレクトリや、別のSolution・生成環境の所有マーカーがあるツリーは使わずにエラーにする。出力領域はソース走査・テンプレートから除外する。
@@ -187,9 +240,9 @@ report = solution.move_project("App", "applications/App", auto_update=False)
 updated = solution.update()
 ```
 
-移動先はSolutionルート基準で、まだ存在しないフォルダーを指定する。実フォルダーと登録先を一緒に移し、内部依存・既存Projectオブジェクト・非保存設定を保持する。Projectの生成済み `CMakeLists.txt` もフォルダーと一緒に移る。既定ではSolutionのCMakeファイルを再生成して構成し直すが、コンパイルはしない。必要に応じてbuild/run/testを実行する。
+移動先は基準ディレクトリからの相対（または絶対）で、まだ存在しないフォルダーを指定する。2026-10-17更新：基準ディレクトリの外へも移せる。実フォルダーと登録先を一緒に移し、内部依存・既存Projectオブジェクト・非保存設定を保持する。Projectの設定と生成ファイルは`.cppbuild`にあり、動かない（Projectのファイルの位置を指す相対パスだけを書き直す）。`move_files=False`で記録だけを付け替えられる（[Solutionの配置](#solution-layout)）。既定ではSolutionのCMakeファイルを再生成して構成し直すが、コンパイルはしない。必要に応じてbuild/run/testを実行する。
 
-2026-10-01更新：ビルドツリーはSolutionごとなので、移動したProjectのキャッシュは退避しない（旧配置のビルドディレクトリはツリー内に残る）。旧仕様の`.cppbuild/generated`・`.cppbuild/build`があれば、従来どおり全体`.cppbuild/relocations/<id>/`へ退避し、退避パスをreport.changed_pathsに含む。管理設定とソースは移動先に保持される。再生成失敗時も移動自体は完了しているため、原因を直してsolution.updateを再実行する。移動前から実フォルダーが存在しない場合の登録修復には対応しない。
+2026-10-01更新：ビルドツリーはSolutionごとなので、移動したProjectのキャッシュは退避しない（旧配置のビルドディレクトリはツリー内に残る）。2026-10-17更新：Projectのディレクトリにキャッシュはないので、退避（`.cppbuild/relocations`）もなくなった。再生成失敗時も移動自体は完了しているため、原因を直してsolution.updateを再実行する。移動前から実フォルダーが存在しない場合の登録修復には対応しない。
 
 他のビルド・設定操作を停止し、非同期runはwaitしてから呼び出す。他Solutionの利用側は、移動したSolutionの入口を取り込むため、Solution内の移動では再生成が不要。利用スクリプトやC++本文、任意の引数・環境変数に埋め込んだパスは必要に応じて修正する。リンクやジャンクションを含む移動は拒否する。
 
@@ -260,11 +313,11 @@ GUIDは `project.settings.get().guid` で取得できる。`add_project` は渡�
 
 Projectの登録解除でも未使用になった参照を自動削除する。依存の変更を生成物へ反映する際は、従来どおりupdate/buildを呼ぶ。リンク先のファイルや成果物は削除しない。
 
-旧管理ファイルはopen/reload時にschema_version=4へ自動保存して移行する。旧別名を同じ対象GUIDへ統合し、解除用IDはすべて維持する。初回は書き込み権限が必要で、対象GUIDが未保存の旧外部リンクはリンク先も必要。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
+2026-10-17更新：旧管理ファイル（schema 4以前）の自動移行はなくなった（読み込むとエラー）。利用側と外部Solutionの相対配置を変えた場合は、全利用元でunlinkして新しい所在へ再リンクする。相対配置を維持した一括移設では設定変更は不要。GUIDだけで移動先を探索する機能はない。
 
 # 別の環境への移設と相対パス（2026-09-30追加）
 
-管理JSONのパスは、そのJSONがあるディレクトリからの相対パスで保存する。APIへ絶対パスを渡しても保存時に変換する。APIに相対パスを渡す場合は、従来どおりSolution設定がSolutionルート、Project設定・リンク先がProjectルート基準。open/createの引数は作業ディレクトリ基準のまま。
+2026-10-17更新：Solutionの管理JSONのパスは`.cppbuild`からの相対、Projectの管理JSON（`.cppbuild/projects/<名前>/`）のパスはProjectのディレクトリからの相対で保存する。APIへ絶対パスを渡しても保存時に変換する。APIに相対パスを渡す場合は、Solution設定が基準ディレクトリ（`solution.root`）、Project設定・リンク先がProjectのディレクトリ基準。open/createの引数は作業ディレクトリ基準のまま。
 
 例えば次の配置では、Consumerの参照一覧に `../../Provider/.cppbuild` を保存する。
 
@@ -276,8 +329,7 @@ Workspace/
 
 Workspace全体を別の場所へ移してから `Solution.open(new_workspace / "Consumer/.cppbuild")` すれば、移設先のProviderを参照する。ソース、include、PCH、共有素材、CMakeソース／パッケージ、ImportedLibraryのDLL・LIB・includeも同じ方式で保存する。利用側と依存先の相対配置を維持すること。
 
-- 旧形式は移設前の環境で各Solutionをopen/reloadし、schema_version=4へ自動移行してから移す。初回は設定の書き込み権限が必要。
-- 既存CMakeキャッシュは移設先で再利用せず、update/buildして再生成する。新配置では所在を含む識別子が変わるため旧領域を参照しない。テンプレート機能は出力領域を除外する。旧配置の`.cppbuild/build`・`.cppbuild/generated`も除外対象。
+- 既存CMakeキャッシュは移設先で再利用せず、update/buildして再生成する。新配置では所在を含む識別子が変わるため旧領域を参照しない。テンプレート機能は出力領域を除外する。
 - ツールの所在など非保存ビルド設定は移設先で設定し直す。定義文字列・任意引数・外部CMakeListsやソース本文に埋め込まれた絶対パスは自動変換しない。
 - 別ドライブや別共有など相対パスにできない参照はエラー。設定と依存先を共通のドライブ／共有配下へ配置する。
 
@@ -322,7 +374,7 @@ INTERFACE_LIBRARYは自身のライブラリバイナリを生成せず、イン
 
 2026-10-01更新（CMakeでの表現）：形式の選択は生成ファイルのキャッシュ変数 `<Solution>_<Project>_TYPE` で、CppBuildはその値を構成ごとに渡す。1つのビルドツリーの中で、必要な形式ごとにターゲットを作る（作成時形式は `<Solution>_<Project>`、それ以外は `_static`・`_shared`・`_interface` を付ける。zlib/zlibstaticと同じ形）。静的と共有を同時に作る場合、選択された形式（既定は静的）以外の成果物名に `-shared`／`-static` を付け、静的ライブラリとDLLのインポートライブラリが同じ名前にならないようにする。形式を切り替えても両方のビルド結果がツリーに残るため、元に戻したときは再コンパイルしない。
 
-旧APIのHEADER_ONLYはINTERFACE_LIBRARYへ書き換える。旧schema_version=1/2/3のheader_only設定・内部／外部依存・ImportedLibraryはopen/reloadでschema_version=4へ移行し、GUIDと依存IDを保持する。旧設定に形式が一つならそれを作成時形式とし、複数のライブラリ形式がある場合は静的→共有→インターフェースの順で最初に存在する形式を採用する。ライブラリと実行ファイル等が混在する旧設定は、データを破棄せずエラーにする。移行前に旧版でProjectを分けるなどして整理すること。
+旧APIのHEADER_ONLYはINTERFACE_LIBRARYへ書き換える。2026-10-17更新：旧schema（header_onlyを含む）の移行はなくなった。
 
 移行には設定の書き込み権限が必要。旧種類設定ファイルと旧vs2022-<architecture>-header_only生成物は自動削除しない。新名称の生成物はupdate/buildで生成する。テンプレート・Project移動でも作成時形式を保持する。
 
@@ -388,7 +440,7 @@ ecs.set_build_settings(SolutionBuildSettings(project_types={stl_guid: ProjectTyp
 
 - 菱形の依存（ECS→A→STL、ECS→B→STL）では、A・Bが自分の `deps/STL` を登録していても、最上位の `ECS/deps/STL` が使われる。ECSにSTLへの依存を追加する必要はない。clone内に `deps/` がなくてもよい。
 - 最上位Solutionが自分で `link_solution` した所在は、探索ディレクトリより優先する（作業版を指す場合など）。
-- 探索対象は、探索ディレクトリ直下の各ディレクトリにある `.cppbuild/project.json`（Solution）だけ。再帰的には探さない。同じGUIDが2か所にあるとエラーになる。
+- 2026-10-17更新：探索ディレクトリの下を深さに関係なく探し、`.cppbuild/project.json`（Solution）を見つける（リポジトリの中の `build/cppbuild/.cppbuild` のような置き場所でもよい）。1つのリポジトリに複数のSolutionがあってもよい。見つけたSolution自身の依存探索ディレクトリの中（そのSolutionが同梱する依存のコピー）は、同じ子ディレクトリの中にある場合に除く。これにより、菱形の依存で `deps/A/deps/STL` と `deps/STL` が「同じGUIDが2か所」にならない。入らないディレクトリは、`.cppbuild`・`.git`・`__pycache__`・`.cache`・`.venv`・`node_modules` という名前のもの、シンボリックリンク・ジャンクション、CppBuildの出力先、clone中の一時ディレクトリ、CMakeのビルドツリー（`CMakeCache.txt` があるもの）。`build` という名前のディレクトリには入る。ディレクトリだけをたどり、実測で18,544ディレクトリに0.84秒（ウォームキャッシュ）。同じGUIDが2か所にあるとエラーになる。従来は直下の `<子>/.cppbuild` だけを探していた（これも引き続き見つかる）。
 - 依存先Projectの `ProjectBuildSettings(project_type=...)` でも、静的⇔共有を切り替えられる。外部Solution内のProjectは、最上位の `project_types`（GUID指定）で切り替える。
 - 2026-10-07追加：Windowsで `__declspec(dllexport)` を付けていないライブラリを共有にすると、DLLにインポートライブラリ（.lib）ができず、利用側のリンクが `LNK1104` で失敗する。ライブラリProjectで `project.settings.set_windows_export_all_symbols()` を呼ぶと、生成する共有ライブラリのターゲットにCMakeの `WINDOWS_EXPORT_ALL_SYMBOLS ON` を付け、ソースを変えずに静的⇔共有を切り替えられる。Project単位の保存する管理設定（`ProjectSettingsData.windows_export_all_symbols`、既定False、`False` を渡すと解除）で、生成ファイルに書くためCppBuildなしのビルドにも効く。静的・INTERFACEの形式とWindows以外には影響しない。Solution単位の設定は設けない（CppBuildなしでは、CMake標準の `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON` を構成時に渡せば全ターゲットに効く）。データメンバー（変数）は書き出されないため、DLL越しに使う変数には従来どおり `__declspec(dllimport)` が必要。
 
@@ -481,7 +533,7 @@ app_solution.remove_git_source("STL")           # どのProjectもリンクし�
 - **CppBuildなしの構成**：最上位の `CppBuildTopLevel.cmake` に、間接依存を含む全リンク先のURL・コミット・置き場所が並ぶ。構成時に、置き場所がなければ一時ディレクトリへcloneして記録のコミットをcheckoutし、置き場所へ移す。`-DCPPBUILD_FETCH=OFF` で取得を無効にできる。
 - **取得できない場合**：gitがない、オフライン、権限がない、コミットがない場合は、対象の一覧（置き場所・URL・コミット・理由）と、手で置くコマンド（`git clone <URL> <置き場所> && git -C <置き場所> checkout <コミット>`）をエラーで示す（Pythonは `GitFetchError.failures`）。
 - **生成形式の確認**：リンク先の生成ファイルが別の版のCppBuildで作られ、取り決めが合わない場合は、構成時にエラーにする（各Solutionの `CMakeLists.txt` が `CPPBUILD_FORMAT` を宣言し、取り込む側が確認する）。
-- **リンク先リポジトリの前提**：CppBuildのSolutionを含み、その生成ファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`）をコミットしていること。`deps/` と `.cppbuild/output/` はコミットしない。
+- **リンク先リポジトリの前提**：CppBuildのSolutionを含み、その生成ファイル（`.cppbuild`の中の `CMakeLists.txt`・`CppBuildTopLevel.cmake`・`projects/*/CMakeLists.txt`）をコミットしていること。`deps/` と `.cppbuild/output/`・`.cppbuild/operations/` はコミットしない。2026-10-17追加：`.cppbuild`はリポジトリのどこにあってもよい（第3引数で指定）。リンク先SolutionのProjectがリポジトリの外にあると、cloneだけではビルドできないため、`link_git` はエラーにして何も残さない。
 - **制約**：パス指定（`link_solution`）でリンクしたSolutionの中のgitの記録はたどらない（gitでリンクしたSolutionの記録だけをたどる）。1つのリポジトリから使えるSolutionは1つ。サブモジュール・Git LFSは扱わない。`remove_git_source` は記録だけを消し、cloneは削除しない。
 
 
@@ -521,8 +573,8 @@ except InvalidValueError as e:                           # e.field、e.value、e
 cppbuild.CPP_STANDARDS, cppbuild.CONFIGURATIONS, cppbuild.ARCHITECTURES, cppbuild.GENERATORS
 cppbuild.MSVC_RUNTIMES, cppbuild.LIBRARY_TYPES, cppbuild.SWITCHABLE_TYPES
 
-# ファイルの種類（Solutionのルート基準の相対パスか絶対パス）
-solution.file_kind("App/CMakeLists.txt")   # FileKind.GENERATED
+# ファイルの種類（基準ディレクトリからの相対パスか絶対パス）
+solution.file_kind(".cppbuild/projects/App/CMakeLists.txt")   # FileKind.GENERATED
 solution.file_kind(".cppbuild/project.json")  # FileKind.MANAGED
 solution.file_kind("App/src/main.cpp")     # None（CppBuildのファイルではない）
 
@@ -533,7 +585,7 @@ solution.set_build_settings(SolutionBuildSettings(shared_libraries=True))
 report = solution.unlink_git_source("STL")  # report.unlinked: ((Project名, dependency_id), ...)
 ```
 
-- **トランザクション**：`with solution.transaction() as change:` の中で設定を変える。ブロックを抜けると `solution.update()` を実行し、結果を `change.update` に入れる。ブロックが例外を出したとき（例外はそのまま伝わる）、`update()` が例外を出したとき、`update()` が失敗したときは、ブロック内でCppBuildが書いた管理ファイル（`.cppbuild/` の設定・種類別設定・テンプレート）と生成ファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`）を書く前の内容に戻し、新しく作ったファイル・空のディレクトリを消し、設定を読み直す。`link_git` が新しくしたcloneも消す。`change.success` は更新が成功して戻していないとき真。
+- **トランザクション**：`with solution.transaction() as change:` の中で設定を変える。ブロックを抜けると `solution.update()` を実行し、結果を `change.update` に入れる。ブロックが例外を出したとき（例外はそのまま伝わる）、`update()` が例外を出したとき、`update()` が失敗したときは、ブロック内でCppBuildが書いた・消した管理ファイル（`.cppbuild/` の設定・種類別設定・テンプレート。`remove_project` で消した設定を含む）と生成ファイル（`.cppbuild` の中の `CMakeLists.txt`・`CppBuildTopLevel.cmake`）を書く前の内容に戻し、新しく作ったファイル・空のディレクトリを消し、設定を読み直す。`link_git` が新しくしたcloneも消す。`change.success` は更新が成功して戻していないとき真。
   - 戻さないもの：ソースファイル（`add_file` 等）、ビルドツリー・成果物。ビルドツリーは失敗した構成のままだが、次の操作で構成し直す。
   - 途中で別のプロセスが書き換えたファイルは戻さず、`change.conflicts` に入れる。トランザクションはロックを保持し続けないため、同時に変更すること自体は防がない。
   - `move_project` はファイルを移動するため、トランザクション内ではエラー。入れ子もエラー。
@@ -542,4 +594,4 @@ report = solution.unlink_git_source("STL")  # report.unlinked: ((Project名, dep
 - **ファイルの種類**：`GENERATED`（管理ファイルから `update()` が作る。CppBuildなしでビルドできるようコミットする）、`MANAGED`（`.cppbuild/` の中の設定。コミットする）、`OUTPUT`（ビルドツリー・成果物・ロック。コミットしない）、`FETCHED`（`git_sources` のclone。記録から取得し直せる。コミットしない）。CppBuildの印のない `CMakeLists.txt` は `None`。手で置いたリンク先Solutionの中のファイルも同じ規則で分類する（そのリポジトリのファイルとして扱うかは利用側で決める）。
 - **すべて共有**：`SolutionBuildSettings.shared_libraries=True` は、最上位の操作で、静的・共有のどちらかになるライブラリ（リンク先Solutionを含む）を共有ライブラリにする。`project_types` と、そのProject自身の `ProjectBuildSettings.project_type` の指定が優先する。INTERFACE_LIBRARYのままのものは変えない。dllexportのないライブラリは `set_windows_export_all_symbols()` が必要。
 - **リンク先単位の解除**：`unlink_git_source(name)` は、このSolutionの全Projectから、そのcloneの中のProjectへのリンクを外し、`git_sources` の記録を消す。1回の保存で行う。cloneは残す（`remove_git_source` と同じ）。
-- **Solutionの外のファイルからのテンプレート**：`create_file_template(name, source_file)` の `source_file` には絶対パスを渡せる（従来から可能）。素材はSolutionの `.cppbuild/templates/` に写す。
+- **Solutionの外のファイルからのテンプレート**：`create_file_template(name, source_file)` の `source_file` には絶対パスを渡せる（従来から可能）。素材はSolutionの `.cppbuild/templates/` に写す。2026-10-17更新：`file_templates` の値は `.cppbuild/templates/` からの名前（例 `Header.hpp`）。`set_file_template` に渡すファイルも `.cppbuild/templates/` の下になければならない。

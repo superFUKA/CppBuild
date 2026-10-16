@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+
+from cppbuild.cmake_files import entry_path
 from unittest.mock import patch
 
 from cppbuild import ProjectType as T, ProjectBuildSettings, Solution, SolutionBuildSettings, SettingsError
@@ -24,7 +26,7 @@ class DependencyTests(unittest.TestCase):
             reopened.remove_project("Math")
         reopened.get_project("App").settings.unlink(report.dependency_id)
         reopened.remove_project("Math")
-        self.assertTrue(self.math.settings.path.exists())
+        self.assertFalse(self.math.settings.path.exists())
 
     def test_cycle_and_mismatch_stop_before_tool(self):
         self.app.settings.link_project(self.math, T.STATIC_LIBRARY)
@@ -117,4 +119,4 @@ class DependencyTests(unittest.TestCase):
         (self.app.root / "src/main.cpp").write_text("int main() { return 0; }\n")
         self.solution.set_build_settings(SolutionBuildSettings(build_projects=["App"], configuration="Release"))
         success(self.solution.build())
-        self.assertNotIn("Demo::Math", (self.app.root / "CMakeLists.txt").read_text())
+        self.assertNotIn("Demo::Math", (entry_path(self.app)).read_text())

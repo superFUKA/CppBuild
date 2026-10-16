@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import CMakeSettings, ProjectBuildSettings, ProjectType as T, Solution, SolutionBuildSettings
 from cppbuild import generators, workspace
 
@@ -20,7 +22,7 @@ class _Demo:
         self.lib.add_file("src/lib.cpp", content="int value() { return 42; }\n", auto_update=False)
 
     def entry(self):
-        return workspace.plan(self.solution).documents()[self.solution.root / "CMakeLists.txt"]
+        return workspace.plan(self.solution).documents()[self.solution.config_directory / "CMakeLists.txt"]
 
 
 class StartupProjectTests(_Demo, unittest.TestCase):
@@ -60,10 +62,10 @@ class StartupProjectTests(_Demo, unittest.TestCase):
 
     def test_programs_are_debugged_in_their_project_directory(self):
         tests = self.solution.add_project("Tests", "Tests", T.TEST)
-        line = 'set_target_properties(Demo_Tests PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")'
+        line = 'set_target_properties(Demo_Tests PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${_cppbuild_project_dir}")'
         documents = workspace.plan(self.solution).documents()
-        self.assertIn(line, documents[tests.root / "CMakeLists.txt"])
-        self.assertNotIn("VS_DEBUGGER_WORKING_DIRECTORY", documents[self.lib.root / "CMakeLists.txt"])
+        self.assertIn(line, documents[entry_path(tests)])
+        self.assertNotIn("VS_DEBUGGER_WORKING_DIRECTORY", documents[entry_path(self.lib)])
 
 
 def startup_of(build):
@@ -104,7 +106,7 @@ class _RealStartup(_Demo):
         # Plain CMake without tests: the TEST target is missing, so the next program is started.
         toolchain = generators.resolve(settings)
         build = self.root / "no-tests"
-        result = subprocess.run([str(c) for c in (*toolchain.configure(self.solution.root, build), "-DBUILD_TESTING=OFF")],
+        result = subprocess.run([str(c) for c in (*toolchain.configure(self.solution.config_directory, build), "-DBUILD_TESTING=OFF")],
                                 env=toolchain.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
         self.assertEqual(startup_of(build), "Demo_App")

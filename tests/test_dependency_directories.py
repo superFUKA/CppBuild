@@ -116,7 +116,7 @@ class DependencyDirectoryTests(unittest.TestCase):
         self.assertEqual(self.nodes()["STL"].project.root, (self.root / "work/STL/STL").resolve())
 
     def test_dependency_directory_validation(self):
-        for directories in (["."], [".cppbuild"], ["App"], ["deps", "deps"], ["../outside"], "deps"):
+        for directories in (["."], [".cppbuild"], ["App"], ["App/src/deps"], ["deps", "deps"], "deps"):
             with self.subTest(directories=directories):
                 data = self.ecs.settings.get()
                 data.dependency_directories = directories
@@ -133,7 +133,8 @@ class DependencyDirectoryTests(unittest.TestCase):
         from cppbuild import TemplateTools
         self.use_dependency_directory()
         template = TemplateTools.create_solution_template(self.ecs, self.root / "Template")
-        self.assertFalse((template / "deps").exists())
+        self.assertFalse((template.parent / "deps").exists())
+        self.assertTrue((template.parent / "App").is_dir())
         restored = Solution.create(self.root / "Restored", "Restored", template=template)
         self.assertEqual(restored.settings.get().dependency_directories, ["deps"])
         # References into the source's deps/ follow the layout into the restored Solution.

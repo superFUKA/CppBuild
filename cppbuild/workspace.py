@@ -11,7 +11,7 @@ from functools import cached_property
 import hashlib
 from pathlib import Path
 
-from . import cmake_files, storage
+from . import cmake_files, paths, storage
 from .graph import resolve
 from .models import Dependency, ImportedLibrary, ProjectType, SettingsError
 
@@ -64,7 +64,8 @@ class Plan:
             for dependency in project.settings._data.dependencies.values():
                 if isinstance(dependency, Dependency) and dependency.project_guid in self.projects:
                     provider = self.projects[dependency.project_guid]
-                    tables = [every] if project.solution.root == provider.solution.root else [every, crossing]
+                    same = project.solution.config_directory == provider.solution.config_directory
+                    tables = [every] if same else [every, crossing]
                     for table in tables:
                         request = table.setdefault(dependency.project_guid, Request())
                         (request.listed if listed else request.built).add(dependency.project_type)
@@ -85,14 +86,14 @@ class Plan:
         return [(p, crossing[p.settings._data.guid].tokens())
                 for p in sorted(self.solution.projects(), key=lambda p: p.name) if p.settings._data.guid in crossing]
     def _external_projects(self):
-        return sorted((p for p in self.projects.values() if p.solution.root != self.solution.root),
-                      key=lambda p: (str(p.solution.root), p.name))
+        return sorted((p for p in self.projects.values() if p.solution.config_directory != self.solution.config_directory),
+                      key=lambda p: (str(p.solution.config_directory), p.name))
 
     def external_solutions(self):
         result = {}
         for project in self._external_projects():
-            result.setdefault(project.solution.root, project.solution)
-        return [result[root] for root in sorted(result, key=str)]
+            result.setdefault(project.solution.config_directory, project.solution)
+        return [result[config] for config in sorted(result, key=str)]
 
     def linked_solutions(self):
         """(Solution, relative directory, binary subdirectory, IDE folder) per linked Solution."""
@@ -102,8 +103,8 @@ class Plan:
         for other in solutions:
             name = other.settings._data.name
             if sum(o.settings._data.name.casefold() == name.casefold() for o in solutions) > 1:
-                name += " (" + hashlib.sha256(str(other.root).encode()).hexdigest()[:12] + ")"
-            names[other.root] = name
+                name += " (" + hashlib.sha256(str(other.config_directory).encode()).hexdigest()[:12] + ")"
+            names[other.config_directory] = name
         used, result = set(), []
         for other in solutions:
             binary = other.settings._data.name
@@ -112,8 +113,8 @@ class Plan:
                 binary = f"{other.settings._data.name}_{index}"
                 index += 1
             used.add(binary.casefold())
-            directory = cmake_files._relative(self.solution.root, other.root, "A linked Solution")
-            folder = None if folders is None else folders.linked_projects + "/" + names[other.root]
+            directory = cmake_files._relative(self.solution.config_directory, other.config_directory, "A linked Solution")
+            folder = None if folders is None else folders.linked_projects + "/" + names[other.config_directory]
             result.append((other, directory, binary, folder))
         return result
 
@@ -140,23 +141,23 @@ class Plan:
 
     def _documents(self, result, visited):
         # Files already written from an including Solution's point of view are kept.
-        visited.add(self.solution.root)
-        result.setdefault(self.solution.root / cmake_files.ENTRY, cmake_files.solution_entry(self.solution))
-        result.setdefault(self.solution.root / cmake_files.TOP_LEVEL, cmake_files.top_level(self))
+        visited.add(self.solution.config_directory)
+        result.setdefault(self.solution.config_directory / cmake_files.ENTRY, cmake_files.solution_entry(self.solution))
+        result.setdefault(self.solution.config_directory / cmake_files.TOP_LEVEL, cmake_files.top_level(self))
         for project in self.projects.values():
             cmake_files.check_sources(project, self.files[project.settings._data.guid])
-            result.setdefault(project.root / cmake_files.ENTRY, cmake_files.project_entry(project, self.projects))
+            result.setdefault(cmake_files.entry_path(project), cmake_files.project_entry(project, self.projects))
         for other in self.external_solutions():
-            result.setdefault(other.root / cmake_files.ENTRY, cmake_files.solution_entry(other))
+            result.setdefault(other.config_directory / cmake_files.ENTRY, cmake_files.solution_entry(other))
         for other in self.external_solutions():
-            if other.root in visited:
+            if other.config_directory in visited:
                 continue
             # Each linked Solution also builds alone with its own linked Solutions. Refresh its files
             # when its own links resolve here; otherwise leave them for an operation on that Solution.
             try:
                 own = plan(other)
             except (OSError, SettingsError):
-                visited.add(other.root)
+                visited.add(other.config_directory)
                 continue
             own._documents(result, visited)
 
@@ -167,16 +168,17 @@ class Plan:
         foreign = [str(path) for path in documents if path.exists() and not cmake_files.generated_file(path)]
         if foreign:
             raise SettingsError("Files exist that were not generated by CppBuild; move them away to let CppBuild "
-                                "manage these directories: " + ", ".join(foreign))
+                                "write its files there: " + ", ".join(foreign))
         return tuple(Path(path) for path in
                      storage.publish_documents({path: text.encode("utf-8") for path, text in documents.items()}))
 
     @contextmanager
     def lock(self):
-        """The operation locks of this Solution, its Projects and every directory written."""
-        roots = {self.solution.root, *(p.root for p in self.projects.values())}
-        roots |= {path.parent for path in self._all_documents}
-        with storage.operation_lock(*roots):
+        """The operation locks of this Solution and of every linked Solution whose files are written."""
+        configs = {self.solution.config_directory, *(p.solution.config_directory for p in self.projects.values())}
+        # Linked Solutions' own links are written too; every generated file is in some .cppbuild.
+        configs |= {next(p for p in path.parents if p.name == paths.MANAGEMENT) for path in self._all_documents}
+        with storage.operation_lock(*configs):
             yield
 
     # Settings ------------------------------------------------------------------
@@ -231,10 +233,22 @@ class Plan:
 
     # Checks --------------------------------------------------------------------
 
+    def _check_sources(self):
+        """A file in one build belongs to one Project: Projects of different Solutions may share
+        a directory, but not when both are built together (their symbols would be defined twice)."""
+        from .references import source_directories
+        sources = source_directories({p: p.settings._data for p in self.projects.values()})
+        for index, (project, first) in enumerate(sources):
+            for other, second in sources[index + 1:]:
+                if other is not project and paths.overlap(first, second):
+                    raise SettingsError(f"{project.solution.settings._data.name}::{project.name} and "
+                                        f"{other.solution.settings._data.name}::{other.name} are built together "
+                                        f"and their source directories overlap: {first}, {second}")
+
     def _check_names(self):
         """Target, ALIAS and file names that would collide in the one CMake project or its bin directory."""
         targets, aliases = [], []
-        for project in sorted(self.projects.values(), key=lambda p: str(p.root)):
+        for project in sorted(self.projects.values(), key=lambda p: str(p.settings.path)):
             own_targets, own_aliases = _names(project)
             targets += [(name, project) for name in own_targets]
             aliases += [(name, project) for name in own_aliases]
@@ -258,12 +272,13 @@ class Plan:
 
     def check(self, configuration_of):
         """Validation that previously happened while generating, before any tool runs."""
+        self._check_sources()
         self._check_names()
         for node in self.nodes:
             kind = node.settings.project_type
             if kind != ProjectType.INTERFACE_LIBRARY and not cmake_files._compiled_sources(node.project, self.files[node.project.settings._data.guid]):
                 raise SettingsError(f"No C++ sources found for {node.project.name}")
-            if node.project.solution.root == self.solution.root:
+            if node.project.solution.config_directory == self.solution.config_directory:
                 forced = self.solution._build_settings.project_types.get(node.project.settings._data.guid)
                 if forced is not None and node.project._build_settings.project_type == ProjectType.INTERFACE_LIBRARY:
                     raise SettingsError(f"project_types selects {forced.value} for {node.project.name}, "

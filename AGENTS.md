@@ -1,5 +1,9 @@
 # 作業の引き継ぎ
 
+## 最新の追加（2026-10-17）
+
+- **Solutionにつき1つの.cppbuildと自由な配置（実装済み、未コミット）**：Projectの設定（`.cppbuild/projects/<名前>/`）と生成するCMakeをSolutionの `.cppbuild` にまとめ、Projectのディレクトリには何も書かない。`.cppbuild` もProjectもどこに置ける（同じドライブ）。基準ディレクトリ（`base_directory`）、`move_config`、`move_project(move_files=False)`、再帰的な依存探索。互換性は考慮しない（ユーザー指示）：旧形式（schema 4以前）の読み込み・移行は削除。CMake 4.2.3の `cmake_path(NORMALIZE)` が非ASCIIパスで落ちる問題を見つけて回避した。利用シナリオ8件（`layout` を追加）が3生成器で全PASS。全292件成功（3生成器の実ビルド、skipなし、859.0秒）。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭。設計は[配置変更の設計](deliverables/SOLUTION_LAYOUT_PLAN.md)、実装中の判断は[設計整理メモ](deliverables/DESIGN_NOTES.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「Solutionの配置」。次の作業はユーザーの指示に応じたコミット（日本語）。
+
 ## 最新の追加（2026-10-16）
 
 - **詳細ログ（`e359850` でコミット済み）**：`cppbuild.configure_logging(LogSettings(level=..., file=..., format="text"|"json"))` または環境変数 `CPPBUILD_LOG`（`CPPBUILD_LOG_FILE`・`CPPBUILD_LOG_FORMAT`）で有効にする。既定は無効、保存しない。レベルは `ERROR`〜`TRACE`。公開APIの呼び出し・引数・戻り値・例外、全コマンドとその出力・環境変数、ファイルの書き込み・削除、ロック、イベント、構成を省いた理由などを記録する。全285件成功（3生成器の実ビルド、skipなし）、TRACEで記録しながらの全件も成功。利用シナリオは未実行。作業前から残っていた2026-10-13の組み込み向けAPIは `cfa12bc` でコミット済み。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「詳細ログ」。

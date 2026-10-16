@@ -18,15 +18,21 @@ def validate(value):
         raise SettingsError("Drive-relative output paths are not supported")
 
 
+def _config(owner):
+    """The .cppbuild of the Solution, or of the Project's Solution, that owns the output."""
+    return owner.config_directory if hasattr(owner, "config_directory") else owner.solution.config_directory
+
+
 def root(owner, value):
+    """An output root; a relative value is relative to the owning Solution's .cppbuild."""
     validate(value)
-    return (owner.root / ".cppbuild" / value).resolve()
+    return (_config(owner) / value).resolve()
 
 
 def identity(owner, context=""):
-    # A copied Project retains its GUID; include its location to isolate its cache.
+    # A copied Solution or Project retains its GUID; its settings file isolates its cache.
     guid = getattr(owner.settings._data, "guid", "solution")
-    return hashlib.sha256((str(owner.root) + "\0" + guid + "\0" + context).encode()).hexdigest()[:10]
+    return hashlib.sha256((str(owner.settings.path) + "\0" + guid + "\0" + context).encode()).hexdigest()[:10]
 
 
 def area(owner, value, context=""):
@@ -37,7 +43,7 @@ def area(owner, value, context=""):
 def claim(owner, value, context=""):
     directory = area(owner, value, context)
     marker = directory / MARKER
-    expected = {"root": str(owner.root), "guid": getattr(owner.settings._data, "guid", None),
+    expected = {"owner": str(owner.settings.path), "guid": getattr(owner.settings._data, "guid", None),
                 "identity": identity(owner, context), "context": context}
     if marker.exists():
         if storage.read_json(marker) != expected:

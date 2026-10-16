@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from cppbuild.cmake_files import entry_path
+
 from cppbuild import ProjectType as T, SettingsError, Solution, SolutionFolderSettings
 from cppbuild import cmake_files, testing, workspace
 
@@ -59,7 +61,7 @@ class NameTests(unittest.TestCase):
     def test_test_names_are_prefixed_per_project(self):
         solution = Solution.create(self.root / "S", "S")
         tests = self.add(solution, "Tests", T.TEST, "#include <gtest/gtest.h>\nTEST(A, B) {}\n")
-        text = workspace.plan(solution).documents()[tests.root / "CMakeLists.txt"]
+        text = workspace.plan(solution).documents()[entry_path(tests)]
         self.assertIn('TEST_PREFIX "Tests." PROPERTIES LABELS S_Tests', text)
         junit = self.root / "results.xml"
         junit.write_text('<testsuite><testcase name="Tests.A.B"/><testcase name="Other"/></testsuite>')

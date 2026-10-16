@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 
-from . import storage, output_paths, cmake_files, logs
+from . import storage, output_paths, cmake_files, logs, paths
 from .models import AlreadyRegisteredError, CMakePackage, CMakeSource, Dependency, ImportedLibrary, NotRegisteredError, SettingsError
 
 
@@ -20,18 +20,30 @@ def _replacements(values):
         raise SettingsError("replacements must map placeholder names to strings")
 
 
-def material_path(solution, value):
-    path = storage.contained(solution.root, str(value))
-    base = solution.root / ".cppbuild/templates"
-    if not path.is_relative_to(base) or path == base:
-        raise SettingsError("Registered materials must be under .cppbuild/templates")
+def material_path(solution, name):
+    """The file of a registered material: its name is relative to .cppbuild/templates."""
+    base = solution.config_directory / "templates"
+    path = storage.contained(base, str(name))
+    if path == base:
+        raise SettingsError("Registered materials must be files below .cppbuild/templates")
     return path
+
+
+def material_name(solution, value):
+    """The registered name of a file below .cppbuild/templates (value: relative to the base directory, or absolute)."""
+    base = solution.config_directory / "templates"
+    path = paths.resolve(solution.root, str(value))
+    if not path.is_relative_to(base) or path == base:
+        raise SettingsError("Registered materials must be files below .cppbuild/templates")
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path.relative_to(base).as_posix()
 
 
 def create_file(solution, name, source_file, replacements=None):
     from .core import _name
     _name(name)
-    source = (solution.root / source_file).resolve()
+    source = paths.resolve(solution.root, str(source_file))
     data = source.read_bytes()
     if replacements is not None:
         _replacements(replacements)
@@ -46,7 +58,8 @@ def create_file(solution, name, source_file, replacements=None):
     values = solution.settings.get()
     if name in values.file_templates:
         raise AlreadyRegisteredError("File template is already registered", kind="file_template", name=name)
-    destination = material_path(solution, ".cppbuild/templates/" + name + source.suffix)
+    filename = name + source.suffix
+    destination = material_path(solution, filename)
     recorded = storage.before_write(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with storage.write_lock(solution.settings.path.parent):
@@ -54,7 +67,7 @@ def create_file(solution, name, source_file, replacements=None):
         with destination.open("xb") as stream:
             stream.write(data)
         storage.after_write(recorded, data)
-        values.file_templates[name] = destination.relative_to(solution.root).as_posix()
+        values.file_templates[name] = filename
         try:
             return solution.settings._publish(values)
         except BaseException:
@@ -127,15 +140,22 @@ def _portable(project, data):
 
 
 def _snapshot(solution, destination, name, *, template):
+    """Copy the base directory tree to destination with a new Solution in it; returns its .cppbuild.
+    .cppbuild keeps its place in the tree, so it and every Project must be in the base directory."""
     from .core import Solution, _name
     _name(name)
     destination = Path(destination).resolve()
     if destination.exists():
         raise FileExistsError(destination)
-    if destination.is_relative_to(solution.root) or solution.root.is_relative_to(destination):
-        raise SettingsError("Template source and destination must be disjoint")
     # Always use saved management data; never transplant ephemeral settings.
-    source = Solution.open(solution.root / ".cppbuild")
+    source = Solution.open(solution.config_directory)
+    if paths.overlap(destination, source.root):
+        raise SettingsError("Template source and destination must be disjoint")
+    outside = [p.name for p in source.projects() if not paths.inside(p.root, source.root)]
+    if not paths.inside(source.config_directory, source.root) or outside:
+        raise SettingsError("A template copies the base directory; .cppbuild and every Project must be inside it"
+                            + (f" (outside: {', '.join(outside)})" if outside else ""))
+    config = source.config_directory.relative_to(source.root)
     values = source.settings.get()
     project_data = [(p, _portable(p, p.settings.get())) for p in source.projects()]
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -143,14 +163,14 @@ def _snapshot(solution, destination, name, *, template):
     with tempfile.TemporaryDirectory(prefix=".cppbuild-template-", dir=destination.parent) as temporary:
         stage = Path(temporary) / "snapshot"
         # Dependency directories hold external clones, restored by their owner, not template content.
-        _copy_tree(source.root, stage, skip={storage.contained(source.root, d) for d in values.dependency_directories})
-        clone = Solution.create(stage, name)
+        dependency_roots = [paths.resolve(source.root, d) for d in values.dependency_directories]
+        _copy_tree(source.root, stage, skip=set(dependency_roots))
+        clone = Solution.create(stage / config.parent, name, base_directory=paths.relative(stage / config.parent, stage))
         cloned = clone.settings.get()
         cloned.references = deepcopy(values.references)
-        dependency_roots = [storage.contained(source.root, d) for d in values.dependency_directories]
         for reference in cloned.references.values():
             location = (source.root / reference.solution_directory).resolve()
-            if any(location.is_relative_to(root) for root in dependency_roots):
+            if any(paths.inside(location, root) for root in dependency_roots) and paths.inside(location, source.root):
                 # Clones in the source's dependency directories are expected in the new Solution's own.
                 location = destination / location.relative_to(source.root)
             reference.solution_directory = str(location)
@@ -165,9 +185,9 @@ def _snapshot(solution, destination, name, *, template):
                 if isinstance(dependency, Dependency) and dependency.project_guid in identities:
                     dependency.project_guid = identities[dependency.project_guid]
             project.settings.save(data)
-        materials = source.root / ".cppbuild/templates"
+        materials = source.config_directory / "templates"
         if materials.exists():
-            _copy_tree(materials, stage / ".cppbuild/templates", exclude=False)
+            _copy_tree(materials, clone.config_directory / "templates", exclude=False)
         cloned = clone.settings.get()
         cloned.main_project = values.main_project
         cloned.solution_folders = values.solution_folders
@@ -176,19 +196,21 @@ def _snapshot(solution, destination, name, *, template):
         cloned.msvc_runtime = values.msvc_runtime
         # Git records travel with the template; the new Solution clones them on its first operation.
         cloned.git_sources = deepcopy(values.git_sources)
-        cloned.file_templates = {key: material_path(source, value).relative_to(source.root).as_posix()
-                                 for key, value in values.file_templates.items()}
+        cloned.file_templates = dict(values.file_templates)
         clone.settings.save(cloned)
         if template:
-            marker = stage / ".cppbuild/template.json"
-            storage.atomic_write(marker, storage.document(marker, "solution_template", {}))
+            marker = clone.config_directory / "template.json"
+            storage.atomic_write(marker, storage.document(marker, "solution_template", {}, root=stage))
         # Serialize external paths for the final location, not the temporary stage.
         from .core import Project
         from .paths import project_values, relative
-        final_owner = Solution(destination)
+        final_owner = Solution(destination / config, destination)
         final_values = clone.settings.get()
         for reference in final_values.references.values():
-            reference.solution_directory = relative(destination, (stage / reference.solution_directory).resolve())
+            absolute = (stage / reference.solution_directory).resolve()
+            if paths.inside(absolute, stage):
+                absolute = destination / absolute.relative_to(stage)
+            reference.solution_directory = relative(destination, absolute)
         for project in clone.projects():
             final_root = destination / project.root.relative_to(stage)
             data = project.settings.get()
@@ -203,7 +225,7 @@ def _snapshot(solution, destination, name, *, template):
                 storage.atomic_write(stage / path.relative_to(destination), content)
         storage.atomic_write(clone.settings.path, final_owner.settings._document(final_values))
         storage.rename_no_replace(stage, destination)
-    return destination
+    return destination / config
 
 
 @logs.api
@@ -214,9 +236,9 @@ class TemplateTools:
 
 
 def instantiate(template, destination, name):
+    """template: the template's .cppbuild (as create_solution_template returns it)."""
     from .core import Solution
-    root = Path(template).resolve()
-    storage.manifest(root / ".cppbuild/template.json", "solution_template")
-    source = Solution.open(root / ".cppbuild")
-    result = _snapshot(source, destination, name, template=False)
-    return Solution.open(result / ".cppbuild")
+    config = Path(template).resolve()
+    storage.manifest(config / "template.json", "solution_template", root=config)
+    source = Solution.open(config)
+    return Solution.open(_snapshot(source, destination, name, template=False))

@@ -60,30 +60,33 @@ class RelativePathTests(unittest.TestCase):
                 self.assertEqual((app.root / dependency.import_libraries["Debug"]).resolve(), bundle / "vendor/lib/lib.lib")
                 self.assertEqual((app.root / dependency.include_directories[0]).resolve(), bundle / "vendor/include")
         material = solution.settings.get().file_templates["Header"]
-        self.assertEqual((solution.root / material).read_text(encoding="utf-8"), "#pragma once")
+        self.assertEqual((solution.config_directory / "templates" / material).read_text(encoding="utf-8"), "#pragma once")
 
-    def test_every_persisted_path_is_relative_to_its_document(self):
+    def test_every_persisted_path_is_relative_to_its_base(self):
+        """The Solution's paths are relative to .cppbuild, a Project's to the Project's directory."""
         self.add_paths()
         solution = self.assert_document(self.consumer.settings.path, "solution")
         self.assertEqual(solution["projects"]["App"], "../App")
-        self.assertEqual(solution["file_templates"]["Header"], "templates/Header.hpp")
+        self.assertEqual(solution["file_templates"]["Header"], "Header.hpp")
+        self.assertNotIn("base_directory", solution)
         reference = solution["references"][self.lib.settings.get().guid]["solution_directory"]
         self.assertFalse(PureWindowsPath(reference).is_absolute())
-        self.assertEqual((self.consumer.settings.path.parent / reference).resolve(), self.provider.root / ".cppbuild")
+        self.assertEqual((self.consumer.config_directory / reference).resolve(), self.provider.config_directory)
+        self.assertEqual(self.app.settings.path, self.consumer.config_directory / "projects/App/project.json")
         project = self.assert_document(self.app.settings.path, "project")
-        self.assertEqual(project["source_directories"], ["../src", "../include"])
-        self.assertEqual(project["project_headers"], ["../include/pch.hpp"])
+        self.assertEqual(project["source_directories"], ["src", "include"])
+        self.assertEqual(project["project_headers"], ["include/pch.hpp"])
         filename = project["types"][T.EXECUTABLE.value]
-        type_file = self.app.settings.path.parent / filename
+        type_file = self.app.settings.path.parent / "types" / filename
         kind = self.assert_document(type_file, T.EXECUTABLE.value)
-        self.assertEqual(kind["include_directories"], ["../../include"])
+        self.assertEqual(kind["include_directories"], ["include"])
         for dependency in project["dependencies"].values():
             values = dependency["values"]
             if dependency["kind"] in {"source", "package"}:
                 self.assertFalse(PureWindowsPath(values["directory"]).is_absolute())
-                self.assertTrue((self.app.settings.path.parent / values["directory"]).resolve().is_relative_to(self.bundle))
+                self.assertTrue((self.app.root / values["directory"]).resolve().is_relative_to(self.bundle))
             elif dependency["kind"] == "imported":
-                self.assertEqual((self.app.settings.path.parent / values["locations"]["Debug"]).resolve(),
+                self.assertEqual((self.app.root / values["locations"]["Debug"]).resolve(),
                                  self.bundle / "vendor/bin/lib.dll")
 
     def test_transplant_and_unrelated_cwd_keep_all_targets(self):
@@ -114,91 +117,6 @@ class RelativePathTests(unittest.TestCase):
         self.assert_targets(loaded, moved)
         self.assertNotEqual(loaded.get_project("App").settings.get().guid, self.app.settings.get().guid)
 
-    def downgrade(self, solution):
-        # Recreate v1 with absolute paths, including type files and references.
-        for project in solution.projects():
-            raw = storage.manifest(project.settings.path, "project")
-            for key in ("source_directories", "project_headers"):
-                raw[key] = [str((project.root / p).resolve()) for p in raw[key]]
-            for kind, filename in raw["types"].items():
-                path = project.settings.path.parent / "types" / filename
-                data = storage.manifest(path, kind)
-                data["include_directories"] = [str((project.root / p).resolve()) for p in data["include_directories"]]
-                storage.atomic_write(path, storage.encoded(storage.envelope(kind, data)))
-            for dependency in raw["dependencies"].values():
-                value = dependency["values"]
-                if dependency["kind"] in {"source", "package"}:
-                    value["directory"] = str((project.root / value["directory"]).resolve())
-                elif dependency["kind"] == "imported":
-                    for key in ("locations", "import_libraries"):
-                        value[key] = {k: str((project.root / p).resolve()) for k, p in value[key].items()}
-                    value["include_directories"] = [str((project.root / p).resolve()) for p in value["include_directories"]]
-            storage.atomic_write(project.settings.path, storage.encoded(storage.envelope("project", raw)))
-        raw = storage.manifest(solution.settings.path, "solution")
-        for key in ("projects", "file_templates"):
-            raw[key] = {k: str((solution.root / p).resolve()) for k, p in raw[key].items()}
-        for reference in raw["references"].values():
-            reference["solution_directory"] = str((solution.root / reference["solution_directory"]).resolve())
-        storage.atomic_write(solution.settings.path, storage.encoded(storage.envelope("solution", raw)))
-
-    def test_v1_absolute_paths_migrate_once_and_preserve_ids(self):
-        self.add_paths()
-        expected = self.app.settings.get()
-        self.downgrade(self.consumer)
-        loaded = Solution.open(self.consumer.root / ".cppbuild")
-        self.assertEqual(loaded.get_project("App").settings.get(), expected)
-        for project in loaded.projects():
-            for filename in project.settings._revision:
-                self.assertEqual(storage.read_json(filename)["schema_version"], storage.CURRENT_SCHEMA)
-        self.assertEqual(storage.read_json(loaded.settings.path)["schema_version"], storage.CURRENT_SCHEMA)
-        with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
-            Solution.open(loaded.root / ".cppbuild")
-        moved = self.root / "Migrated"
-        shutil.copytree(self.bundle, moved)
-        self.bundle.rename(self.root / "Unavailable")
-        self.assert_targets(Solution.open(moved / "Consumer/.cppbuild"), moved)
-
-    def test_failed_path_migration_restores_original_files(self):
-        self.add_paths()
-        self.downgrade(self.consumer)
-        before = {p: p.read_bytes() for p in self.consumer.root.rglob("*.json")}
-        original = storage.atomic_write
-        def fail(path, content):
-            if path == self.consumer.settings.path:
-                raise OSError("Injected final publish failure")
-            original(path, content)
-        with patch("cppbuild.storage.atomic_write", side_effect=fail), self.assertRaises(OSError):
-            Solution.open(self.consumer.root / ".cppbuild")
-        self.assertEqual(before, {p: p.read_bytes() for p in self.consumer.root.rglob("*.json")})
-
-    def test_nested_type_files_keep_project_relative_api_paths(self):
-        for version in (1, 2, 3):
-            with self.subTest(schema_version=version):
-                solution = Solution.create(self.root / f"NestedV{version}", "Nested")
-                project = solution.add_project("App", "App", T.EXECUTABLE)
-                main = storage.read_json(project.settings.path)
-                type_path = project.settings.path.parent / main["data"]["types"][T.EXECUTABLE.value]
-                kind = storage.read_json(type_path)
-                nested = project.settings.path.parent / "types/nested/settings.json"
-                if version == 1:
-                    main = storage.envelope("project", storage.manifest(project.settings.path, "project"))
-                    main["data"]["types"][T.EXECUTABLE.value] = "nested/settings.json"
-                    kind["data"]["include_directories"] = ["include", str(project.root / "public")]
-                else:
-                    main["data"]["types"][T.EXECUTABLE.value] = "types/nested/settings.json"
-                    kind["data"]["include_directories"] = ["../../../include", "../../../public"]
-                kind["schema_version"] = version
-                storage.atomic_write(nested, storage.encoded(kind))
-                storage.atomic_write(project.settings.path, storage.encoded(main))
-                loaded = Solution.open(solution.root / ".cppbuild")
-                app = loaded.get_project("App")
-                self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])
-                for filename in app.settings._revision:
-                    self.assertEqual(storage.read_json(filename)["schema_version"], storage.CURRENT_SCHEMA)
-                with patch("cppbuild.storage.atomic_write", side_effect=AssertionError("Already migrated")):
-                    app.settings.reload()
-                self.assertEqual(app.settings.get().types[T.EXECUTABLE].include_directories, ["include", "public"])
-
     def test_invalid_dependency_kind_raises_settings_error_without_changing_state(self):
         expected = self.app.settings.get()
         for invalid in ([], {}, None, 17, "unknown"):
@@ -215,12 +133,9 @@ class RelativePathTests(unittest.TestCase):
     def test_stored_absolute_paths_and_other_drive_are_rejected(self):
         raw = storage.read_json(self.consumer.settings.path)
         raw["data"]["references"][self.lib.settings.get().guid]["solution_directory"] = str(self.provider.root / ".cppbuild")
-        for version in (2, 3):
-            with self.subTest(schema_version=version):
-                raw["schema_version"] = version
-                storage.atomic_write(self.consumer.settings.path, storage.encoded(raw))
-                with self.assertRaises(SettingsError):
-                    Solution.open(self.consumer.root / ".cppbuild")
+        storage.atomic_write(self.consumer.settings.path, storage.encoded(raw))
+        with self.assertRaises(SettingsError):
+            Solution.open(self.consumer.root / ".cppbuild")
         # Use a fresh valid Solution for the input-path check.
         other = Solution.create(self.root / "Other", "Other")
         app = other.add_project("App", "App", T.EXECUTABLE)
