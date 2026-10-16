@@ -13,7 +13,7 @@
   - 依存探索が `build` という名前のディレクトリに入らず、`repo/build/cppbuild/.cppbuild` が見つからなかった（試験で検出）。
 - 試験：新規 `tests/test_layout.py`（単体18件：基準ディレクトリの記録・既定では書かないこと、外側のProjectと何も書かないこと、`.cppbuild` を含むProject、`set_base_directory`、共有ソースの許可と同時ビルドの拒否、ドライブ越えの拒否、`move_config` 2件、記録だけの移動、基準外への移動、テンプレートでの `.cppbuild` の位置と基準外のProjectの拒否、探索6件（深い位置、入れ子の依存の除外、外向きの探索ディレクトリ、ビルドツリーと `build`、除外名、同じSolutionの2つのコピー）、見つからない依存。実ビルド3件：日本語のパスで基準外のライブラリをリンク・実行、`.cppbuild` だけから素のcmakeで構成・ビルド・実行、`move_config` 後の実行）。`test_git_sources` にリポジトリの奥の `.cppbuild` と、外側にProjectがあるリンク先の拒否を追加。旧形式の移行の試験15件を削除し（1件は旧schemaを拒否する試験に書き換え）、既存の試験を新しい配置に合わせた（生成ファイルの場所、保存するパスの基準、ロック、`remove_project`、出力領域、素のcmakeの `-S`）。
 - サンプル：`examples/free_layout.py` を追加（`build/cppbuild/.cppbuild` からリポジトリの `src/` をビルド）。既存の例はAPIが変わらないためそのまま動く。保存済みの旧形式のSolutionはリポジトリになかった。利用シナリオに `layout`（8件目）を追加し、`templates`・`standalone` を新しい配置に合わせた。
-- 検証：全292件成功（VS2022・VS2026・Ninjaの実ビルド、skipなし、859.0秒）。利用シナリオ8件が3生成器で全PASS（`.test-work/usage-final-vs2022b`、`usage-final-NinjaMultiConfig`、`usage-final-VisualStudio182026`）。Linux/macOS、VS上のF5操作は未実施。未コミット。
+- 検証：全292件成功（VS2022・VS2026・Ninjaの実ビルド、skipなし、859.0秒）。利用シナリオ8件が3生成器で全PASS（`.test-work/usage-final-vs2022b`、`usage-final-NinjaMultiConfig`、`usage-final-VisualStudio182026`）。Linux/macOS、VS上のF5操作は未実施。`f94b802` でコミット済み。
 
 ## 2026-10-16 詳細ログ
 
