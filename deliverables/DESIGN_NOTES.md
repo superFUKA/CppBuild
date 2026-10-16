@@ -1,5 +1,23 @@
 # 設計整理メモ
 
+## 2026-10-13相談：CppBuildを組み込むプログラムからの依頼（実装済み）
+
+依頼の要旨：利用側がCppBuildの内部の決まりを写さずに済むよう、(1)設定変更とupdateの一体化、(2)作り直しの要否、(3)例外の種類、(4)ファイルの種類、(5)値の一覧、(6)link_git失敗時の片付け、(7)リンク先単位の解除、(8)すべて共有、(9)外のファイルからのテンプレート。依頼文は貼り付け時に崩れており、(1)の要望の前半が欠けていた。ユーザーの「進めてください」で、検討時に示した形で実装した。
+
+- (1) 失敗時に自動で設定を戻す形は採らず、利用者が明示的に使う `solution.transaction()` にした。単独の `update()` の失敗で設定を戻すと、「パッケージを入れれば直る」場合まで設定を消すため。戻す範囲は、ブロック内でCppBuildが書いた管理ファイル・生成ファイル（書き込みを `storage` の記録で捉える）と新しいclone。ソース・ビルドツリーは戻さない。ロックは保持し続けず、他者が書き換えたファイルは戻さずに報告する。**依頼者の求める形と一致するかは未確認。**
+- (2) プロセスをまたぐ「作り直しが要るか」の判定APIは作らず、`update()` 自体を速くした（依頼の2案目）。判定の規則をCppBuildの外へ出すと、それ自体が互換性の約束になるため。CMakeが読んだファイルはFile APIの `cmakeFiles-v1` で得る（内部ファイルは読まない）。これは「ビルドの仕組みはCMakeに任せる」方針に沿う。CMakeが読まないもの（環境変数、PATH上のツールの更新）の変化は、CMake自身の再構成と同じく検出しない。
+- (3) 種類はエラーの「型」で表す（文字列のコードは作らない）。既存の `MissingDependenciesError` 等と同じ形。約300ある `SettingsError` のうち、利用側が分けて扱いそうな登録の重複・不在・主Projectなし・値の不正（列挙値と名前の規則）だけを型にした。残りは従来どおり文言で区別する。
+- (4) 生成ファイルは「作り直せる」と同時に「コミットする」もの（CppBuildなしでビルドするため）。依頼の分類（生成／管理／出力）に、cloneの `FETCHED` を加えた。依頼者が写していた規則（`.cppbuild/` の中の `output` 以外が管理ファイル）は、ロック（`.write.lock`・`operations/`）を含んでおり誤っていた。
+- (5) 列挙値は定数として公開した。名前・OSのライブラリ名・CMakeのターゲット名の規則（正規表現）は公開せず、`InvalidValueError.field` で示す。規則そのものを互換性の約束にしないため。
+- (8) 優先順位は `project_types`（GUID指定）＞各Projectの `ProjectBuildSettings.project_type` ＞ `shared_libraries`。
+- (9) 絶対パスは従来から受け付けていた（`solution.root / source_file`）。バイト列の受け付けは、拡張子の指定が別に要るため追加しない。
+
+実装中に気づいた点（未対応）：
+
+- リンク先SolutionのProjectに `set_build_settings` しても、操作では使われない（依存解決がリンク先Solutionを開き直すため）。リンク先の形式は `project_types` か `shared_libraries` でしか変えられない。従来からの動作で、資料に明記がない。
+- `unlink_git_source` と `remove_git_source` の2つの入口が似ている。`remove_git_source(name, *, unlink=False)` へまとめる案もある。
+- トランザクションは `Solution.update()`（全体）だけを実行する。Project単位の `update()` には対応していない。
+
 ## 2026-10-12調査：コンパイラ情報のFile APIへの移行（案(b)で実装済み）
 
 - 現状：`generators.compiler()` がCMakeの内部ファイル `CMakeFiles/<版>/CMakeCXXCompiler.cmake`・`CMakeSystem.cmake` を正規表現で読み、種類・版・パス・アーキテクチャを得て、`generators.verify()` で要求した環境と照合している。[CMakeラッパーのレビュー](CMAKE_WRAPPER_REVIEW_2026-10-03.md)の最優先の指摘。

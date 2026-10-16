@@ -14,6 +14,14 @@ class ProjectType(str, Enum):
 
 LIBRARY_TYPES = frozenset({ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY,
                            ProjectType.INTERFACE_LIBRARY})
+# Library types a build setting switches between (project_types, ProjectBuildSettings.project_type).
+SWITCHABLE_TYPES = frozenset({ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY})
+
+# Values CppBuild accepts, public so callers can offer or check them before an operation.
+CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
+ARCHITECTURES = ("x64", "Win32", "ARM64")  # None: the generator's or compiler's default
+CPP_STANDARDS = (17, 20, 23)
+MSVC_RUNTIMES = ("dll", "static")
 
 
 class Inheritance(Enum):
@@ -217,10 +225,25 @@ class SolutionBuildSettings:
     cmake: CMakeSettings = field(default_factory=CMakeSettings)
     # Project GUID -> STATIC_LIBRARY/SHARED_LIBRARY, overriding saved link types in this operation.
     project_types: dict[str, ProjectType] = field(default_factory=dict)
+    # Build every static/shared library of the operation, linked ones too, as SHARED_LIBRARY unless
+    # project_types or the Project's own ProjectBuildSettings.project_type selects otherwise.
+    shared_libraries: bool = False
     # The Solution's CMake build trees, one per generation environment.
     intermediate_directory: str = "output/intermediate"
     # Clone missing git_sources (and their own) before an operation, as the generated CMake does.
     fetch_git: bool = True
+
+
+class FileKind(str, Enum):
+    """What a file is to CppBuild (Solution.file_kind); files CppBuild does not own have no kind."""
+    # Written by update() from the management files; committed so plain CMake builds without CppBuild.
+    GENERATED = "generated"
+    # The management files below .cppbuild (settings, type settings, templates); committed.
+    MANAGED = "managed"
+    # Build trees, artifact directories and operation locks; never committed, removable when idle.
+    OUTPUT = "output"
+    # Clones of git_sources (and a clone in progress); fetched again from their records, never committed.
+    FETCHED = "fetched"
 
 
 @dataclass(frozen=True)
@@ -235,6 +258,46 @@ class SettingsError(ValueError):
 
 class SettingsConflictError(SettingsError):
     """Saved settings changed since this object last read them."""
+
+
+class InvalidValueError(SettingsError):
+    """A value CppBuild does not accept. field names the setting or argument; allowed lists the
+    accepted values when they are a fixed set (else None)."""
+
+    def __init__(self, message, *, field, value, allowed=None):
+        self.field, self.value = field, value
+        self.allowed = tuple(allowed) if allowed is not None else None
+        super().__init__(message)
+
+
+class AlreadyRegisteredError(SettingsError):
+    """The name or link is already registered. kind: "project", "dependency" or "file_template";
+    name: the Project or template name, or the dependency id of the existing link."""
+
+    def __init__(self, message, *, kind, name):
+        self.kind, self.name = kind, name
+        super().__init__(message)
+
+
+class NotRegisteredError(SettingsError, KeyError):
+    """Nothing is registered under the name. kind: "project", "dependency", "file_template" or
+    "git_source". Also a KeyError, as these lookups raised before."""
+
+    def __init__(self, message, *, kind, name):
+        self.kind, self.name = kind, name
+        super().__init__(message)
+
+    def __str__(self):
+        return self.args[0]
+
+
+class NoMainProjectError(SettingsError):
+    """The linked Solution has no main Project (project_type None), or its main Project
+    does not have the requested project_type."""
+
+    def __init__(self, message, *, solution, project_type=None):
+        self.solution, self.project_type = solution, project_type
+        super().__init__(message)
 
 
 @dataclass(frozen=True)

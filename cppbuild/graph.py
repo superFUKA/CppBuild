@@ -47,6 +47,7 @@ def resolve(projects, *, include_external_members=False):
             preferred.setdefault(project_guid, project.solution)
         for project_guid, kind in project.solution._build_settings.project_types.items():
             project_types.setdefault(project_guid, kind)
+    shared_libraries = projects[0].solution._build_settings.shared_libraries if projects else False
     found = _dependency_directories({project.solution for project in projects})
     missing = {}
     inherited = _inherited(projects[0].solution._build_settings) if projects else None
@@ -87,7 +88,7 @@ def resolve(projects, *, include_external_members=False):
             project.settings.reload()
             loaded.add(project)
         registry(project.solution)
-        settings = project._resolved_build_settings(requested, project_types)
+        settings = project._resolved_build_settings(requested, project_types, shared_libraries)
         project_guid = project.settings._data.guid
         previous = locations.setdefault(project_guid, project.root)
         if previous != project.root:

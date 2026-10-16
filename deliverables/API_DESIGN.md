@@ -4,6 +4,21 @@
 
 更新日：2026-09-17。設計資料。実装・自動テスト・CMake実ビルド検証は未着手。
 
+## 2026-10-13追加：CppBuildを組み込むプログラム向けのAPI
+
+依頼（2026-10-13、CppBuildを組み込む側から）：利用側がCppBuildの内部の決まり（ファイルの置き方、例外の文言、検証の内容）を写さずに済むようにする。ユーザーの指示で、検討した9項目のうち8項目を実装し、1項目（テンプレートの素材）は既存の動作の明文化とした。使い方は[利用手順](USAGE.md)の「CppBuildを組み込むプログラム向けの機能」、判断は[設計整理メモ](DESIGN_NOTES.md)冒頭。
+
+| 入口 | 内容 |
+| --- | --- |
+| `with solution.transaction() as change:` | ブロックを抜けると `update()`。例外か失敗で、ブロック内に書いた管理ファイル・生成ファイルとcloneを戻す。`TransactionReport(update, restored, restored_paths, removed_clones, conflicts)`、`success` |
+| `ProcessReport.skipped` | 構成の入力と、CMakeが読んだファイルが前回の成功時と同じため、CMakeを実行しなかった |
+| `InvalidValueError(field, value, allowed)`、`AlreadyRegisteredError(kind, name)`、`NotRegisteredError(kind, name)`、`NoMainProjectError(solution, project_type)` | `SettingsError` の子。`NotRegisteredError` は `KeyError` の子でもある |
+| `CONFIGURATIONS`・`ARCHITECTURES`・`CPP_STANDARDS`・`GENERATORS`・`MSVC_RUNTIMES`・`LIBRARY_TYPES`・`SWITCHABLE_TYPES` | 受け付ける値 |
+| `solution.file_kind(path)` | `FileKind.GENERATED`・`MANAGED`・`OUTPUT`・`FETCHED`、またはNone |
+| `SolutionBuildSettings.shared_libraries`（既定False、保存しない） | 静的・共有を切り替えられるライブラリをリンク先も含めて共有にする。`project_types` と各Projectの指定が優先 |
+| `solution.unlink_git_source(name)` | 全Projectからそのcloneの中のProjectへのリンクを外し、記録も消す。`UnlinkReport(change, unlinked)` |
+| `project.settings.link_git(...)` | 失敗したとき、その呼び出しで新しくしたcloneを消す（動作の修正） |
+
 ## 2026-10-03追加：gitのURLによるリンクと自動取得
 
 ユーザー依頼（2026-10-03）：リポジトリをcloneしただけの人が、CppBuild・Pythonなしで `cmake -S . -B build` だけでリンク先も含めてビルドできるようにする。リンク先はCppBuildのSolution（生成ファイルをコミット済み）を含むリポジトリとする。利用方法は[利用手順](USAGE.md)の「gitのURLによるリンクと自動取得」、判断は[設計整理メモ](DESIGN_NOTES.md)の同名節。

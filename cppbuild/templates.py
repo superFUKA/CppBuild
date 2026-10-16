@@ -7,7 +7,7 @@ import shutil
 import tempfile
 
 from . import storage, output_paths, cmake_files
-from .models import CMakePackage, CMakeSource, Dependency, ImportedLibrary, SettingsError
+from .models import AlreadyRegisteredError, CMakePackage, CMakeSource, Dependency, ImportedLibrary, NotRegisteredError, SettingsError
 
 
 EXCLUDED = {".cppbuild", ".git", "build", "dist", ".test-work", "__pycache__", ".venv", ".cache"}
@@ -45,13 +45,15 @@ def create_file(solution, name, source_file, replacements=None):
         data = text.encode("utf-8")
     values = solution.settings.get()
     if name in values.file_templates:
-        raise SettingsError("File template is already registered")
+        raise AlreadyRegisteredError("File template is already registered", kind="file_template", name=name)
     destination = material_path(solution, ".cppbuild/templates/" + name + source.suffix)
+    recorded = storage.before_write(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with storage.write_lock(solution.settings.path.parent):
         solution.settings._assert_unchanged()
         with destination.open("xb") as stream:
             stream.write(data)
+        storage.after_write(recorded, data)
         values.file_templates[name] = destination.relative_to(solution.root).as_posix()
         try:
             return solution.settings._publish(values)
@@ -63,7 +65,7 @@ def create_file(solution, name, source_file, replacements=None):
 def expand(project, name, replacements):
     values = project.solution.settings.get()
     if name not in values.file_templates:
-        raise SettingsError(f"Unknown file template: {name}")
+        raise NotRegisteredError(f"Unknown file template: {name}", kind="file_template", name=name)
     data = material_path(project.solution, values.file_templates[name]).read_bytes()
     if replacements is None:
         return data

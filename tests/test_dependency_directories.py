@@ -7,7 +7,7 @@ import unittest
 
 from cppbuild import (MissingDependenciesError, ProjectBuildSettings, ProjectType as T, SettingsError, Solution,
                       SolutionBuildSettings)
-from cppbuild import storage
+from cppbuild import generators, storage, workspace
 from cppbuild.graph import resolve
 
 EXPORT = ('#pragma once\n#ifdef _WIN32\n#ifdef STL_EXPORTS\n#define STL_API __declspec(dllexport)\n#elif defined(STL_SHARED)\n'
@@ -169,6 +169,48 @@ class DependencyDirectoryTests(unittest.TestCase):
         self.ecs.set_build_settings(SolutionBuildSettings(project_types={self.app.settings.get().guid: T.STATIC_LIBRARY}))
         with self.assertRaises(SettingsError):
             resolve([self.app])
+
+    def test_shared_libraries_switches_every_static_or_shared_library(self):
+        self.use_dependency_directory()
+        a = self.a.settings.get().guid
+        self.ecs.set_build_settings(SolutionBuildSettings(shared_libraries=True))
+        nodes = self.nodes()
+        self.assertEqual({n: nodes[n].settings.project_type for n in ("STL", "A", "B")},
+                         {"STL": T.SHARED_LIBRARY, "A": T.SHARED_LIBRARY, "B": T.SHARED_LIBRARY})
+        self.assertEqual(nodes["App"].settings.project_type, T.EXECUTABLE)
+        cache = workspace.plan(self.ecs).cache_script(generators.resolve(self.ecs._build_settings))
+        self.assertEqual(cache.count('_TYPE "SHARED"'), 3, cache)
+        # project_types and the Project's own selection win over it.
+        local = self.ecs.add_project("Local", "Local", T.STATIC_LIBRARY)
+        local.add_file("src/local.cpp", content="int local() { return 1; }\n", auto_update=False)
+        self.app.settings.link_project(local, T.STATIC_LIBRARY)
+        local.set_build_settings(ProjectBuildSettings(project_type=T.STATIC_LIBRARY))
+        self.ecs.set_build_settings(SolutionBuildSettings(shared_libraries=True, project_types={a: T.STATIC_LIBRARY}))
+        nodes = self.nodes()
+        self.assertEqual({n: nodes[n].settings.project_type for n in ("STL", "A", "B", "Local")},
+                         {"STL": T.SHARED_LIBRARY, "A": T.STATIC_LIBRARY, "B": T.SHARED_LIBRARY,
+                          "Local": T.STATIC_LIBRARY})
+        with self.assertRaises(SettingsError):
+            self.ecs.set_build_settings(SolutionBuildSettings(shared_libraries="yes"))
+
+    def test_shared_libraries_leaves_interface_libraries(self):
+        header = self.ecs.add_project("Header", "Header", T.INTERFACE_LIBRARY)
+        self.app.settings.link_project(header, T.INTERFACE_LIBRARY)
+        self.use_dependency_directory()
+        self.ecs.set_build_settings(SolutionBuildSettings(shared_libraries=True))
+        self.assertEqual(self.nodes()["Header"].settings.project_type, T.INTERFACE_LIBRARY)
+
+    @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
+    def test_real_shared_libraries_builds_every_library_as_a_dll(self):
+        self.use_dependency_directory()
+        for project in (self.a, self.b):
+            project.settings.set_windows_export_all_symbols()
+        self.ecs.set_build_settings(SolutionBuildSettings(shared_libraries=True))
+        report = self.app.run()
+        self.assertTrue(report.success, "\n".join(p.output[-3000:] for p in report.processes))
+        self.assertEqual(report.processes[-1].output.strip(), "82")
+        built = {p.name for p in (self.ecs.root / ".cppbuild/output").rglob("*.dll")}
+        self.assertLessEqual({"STL.dll", "A.dll", "B.dll"}, built)
 
     @unittest.skipUnless(os.environ.get("CPPBUILD_TEST_VS2022") == "1", "Real VS2022 required")
     def test_real_diamond_build_with_shared_override(self):

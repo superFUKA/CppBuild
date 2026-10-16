@@ -22,7 +22,7 @@ import sys
 from urllib.parse import urlsplit
 
 from . import storage, tooling
-from .models import FetchFailure, GitFetchError, GitSource, GitSourceConflictError, SettingsError
+from .models import FetchFailure, GitFetchError, GitSource, GitSourceConflictError, NotRegisteredError, SettingsError
 
 COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -112,6 +112,12 @@ class GitSourceStatus:
     @property
     def config(self):
         return self.directory / self.path
+
+
+@dataclass(frozen=True)
+class UnlinkReport:
+    change: object  # ChangeReport of the saved settings
+    unlinked: tuple  # (Project name, dependency id) of each link removed
 
 
 @dataclass(frozen=True)
@@ -405,11 +411,35 @@ def set_source(solution, url, revision, path):
     return next(s for s in statuses(solution) if s.name == name)
 
 
+def unlink_source(solution, name):
+    """Remove every link of the Solution's Projects to Projects in the place, then its record."""
+    from .models import Dependency
+    from .references import save_projects
+    solution.settings.reload()
+    values = solution.settings.get()
+    if name not in values.git_sources:
+        raise NotRegisteredError(f"Unknown git source: {name}", kind="git_source", name=name)
+    place = base(solution.root, values) / name
+    guids = {guid for guid, reference in values.references.items()
+             if (solution.root / reference.solution_directory).resolve().is_relative_to(place)}
+    removed = []
+
+    def change(data, parent):
+        for project, item in data.items():
+            for key, dependency in list(item.dependencies.items()):
+                if isinstance(dependency, Dependency) and dependency.project_guid in guids:
+                    del item.dependencies[key]
+                    removed.append((project.name, key))
+        del parent.git_sources[name]
+    report = save_projects(solution, change)
+    return UnlinkReport(report, tuple(removed))
+
+
 def remove_source(solution, name):
     solution.settings.reload()
     values = solution.settings.get()
     if name not in values.git_sources:
-        raise KeyError(name)
+        raise NotRegisteredError(f"Unknown git source: {name}", kind="git_source", name=name)
     place = base(solution.root, values) / name
     for reference in values.references.values():
         if (solution.root / reference.solution_directory).resolve().is_relative_to(place):

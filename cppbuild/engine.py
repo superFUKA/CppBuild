@@ -4,7 +4,9 @@ Every operation writes the Solution's CMake files and configures one build tree
 per generation environment; a Project is a target in it. Whole and individual
 operations therefore share the same outputs, and CMake orders dependencies.
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 from pathlib import Path
 import locale
 import os
@@ -17,6 +19,9 @@ from . import tooling, information, generators, output_paths, cmake_files
 
 OWNER = "cppbuild-owner.json"
 CACHE = "cppbuild-cache.cmake"
+# What the last successful configure of a tree was given and read (see configure()).
+CONFIGURED = "cppbuild-configured.json"
+CONFIGURED_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,8 @@ class ProcessReport:
     command: tuple[str, ...]
     returncode: int
     output: str
+    # True when CMake was not run because the tree was already configured from the same input.
+    skipped: bool = False
 
     @property
     def success(self):
@@ -146,7 +153,12 @@ def _owner(solution, toolchain):
 
 
 def configure(plan, settings):
-    """Write the CMake files and configure the build tree of settings' environment."""
+    """Write the CMake files and configure the build tree of settings' environment.
+
+    CMake is not run when the tree's last successful configure had the same input
+    (generated files, cache script, command, collected sources, tools) and no file
+    CMake read has changed since (File API cmakeFiles-v1), as CMake itself would not.
+    """
     solution = plan.solution
     toolchain = generators.resolve(settings)
     build = output_paths.claim(solution, solution._build_settings.intermediate_directory, toolchain.context)
@@ -157,19 +169,91 @@ def configure(plan, settings):
             raise SettingsError("Build directory ownership does not match")
     elif any(p.name != output_paths.MARKER for p in build.iterdir()):
         raise SettingsError("Refusing to use an unowned build directory")
+    cache = build / CACHE
+    cache_text = plan.cache_script(toolchain)
+    command = [*toolchain.configure(solution.root, build), "-C", cache]
+    fingerprint = _fingerprint(plan, settings, command, cache_text)
+    if _configured(plan, build, fingerprint):
+        compiler = generators.compiler(build)
+        if generators.verify(toolchain, compiler) is None:
+            result = ProcessReport(tuple(str(c) for c in command), 0,
+                                   "CMake was not run: the build tree is already configured from the same input.\n",
+                                   skipped=True)
+            return result, build, toolchain, compiler
+    # A configure stopped halfway must not look current.
+    (build / CONFIGURED).unlink(missing_ok=True)
     plan.write()
     storage.atomic_write(marker, storage.encoded(owner))
-    cache = build / CACHE
-    storage.atomic_write(cache, plan.cache_script(toolchain).encode("utf-8"))
-    generators.request_file_api(build, "codemodel-v2", "toolchains-v1")
-    result = tooling.process(settings, [*toolchain.configure(solution.root, build), "-C", cache], generators.configure_directory(build))
+    storage.atomic_write(cache, cache_text.encode("utf-8"))
+    generators.request_file_api(build, "codemodel-v2", "toolchains-v1", "cmakeFiles-v1")
+    result = tooling.process(settings, command, generators.configure_directory(build))
     compiler = None
     if result.success:
         compiler = generators.compiler(build)
         error = generators.verify(toolchain, compiler)
         if error is not None:
             result = ProcessReport(result.command, 1, result.output + "\n" + error)
+    if result.success:
+        inputs = _inputs(build)
+        if inputs is not None:
+            storage.atomic_write(build / CONFIGURED, storage.encoded(
+                {"version": CONFIGURED_VERSION, "fingerprint": fingerprint, "inputs": inputs}))
     return path_hint(result, build, toolchain), build, toolchain, compiler
+
+
+def _fingerprint(plan, settings, command, cache_text):
+    """Everything CppBuild gives a configure, so a change to any of it configures again."""
+    data = {"version": CONFIGURED_VERSION, "format": cmake_files.FORMAT,
+            "command": [str(c) for c in command], "cache": cache_text, "tools": asdict(settings.tools),
+            "documents": {str(path): hashlib.sha256(text.encode("utf-8")).hexdigest()
+                          for path, text in sorted(plan.documents().items(), key=lambda item: str(item[0]))},
+            # The generated CMake collects these again, and a Visual Studio project lists them.
+            "files": {guid: [str(f) for f in files] for guid, files in sorted(plan.files.items())}}
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _stat(path):
+    try:
+        result = Path(path).stat()
+    except OSError:
+        return None
+    return [result.st_mtime_ns, result.st_size]
+
+
+def _inputs(build):
+    """[path, [mtime, size]] of every file the last configure read (File API); None if unknown."""
+    found = generators.file_api_reply(build, "cmakeFiles-v1")
+    if found is None:
+        return None
+    data = found[1]
+    source = Path(data.get("paths", {}).get("source", ""))
+    result = []
+    for item in data.get("inputs", []):
+        if item.get("isGenerated"):
+            continue  # written by CMake into the tree
+        path = Path(item["path"])
+        path = path if path.is_absolute() else source / path
+        result.append([str(path), _stat(path)])
+    return result
+
+
+def _configured(plan, build, fingerprint):
+    try:
+        record = storage.read_json(build / CONFIGURED)
+    except (OSError, SettingsError):
+        return False
+    if (not isinstance(record, dict) or record.get("version") != CONFIGURED_VERSION
+            or record.get("fingerprint") != fingerprint or not (build / "CMakeCache.txt").is_file()
+            or generators.file_api_reply(build, "codemodel-v2") is None):
+        return False
+    for path, text in plan.documents().items():
+        try:
+            if Path(path).read_bytes() != text.encode("utf-8"):
+                return False
+        except OSError:
+            return False
+    return all(isinstance(item, list) and len(item) == 2 and _stat(item[0]) == item[1]
+               for item in record.get("inputs", []))
 
 
 def codemodel(build):

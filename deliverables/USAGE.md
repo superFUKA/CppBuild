@@ -436,3 +436,63 @@ app_solution.remove_git_source("STL")           # どのProjectもリンクし�
 - **生成形式の確認**：リンク先の生成ファイルが別の版のCppBuildで作られ、取り決めが合わない場合は、構成時にエラーにする（各Solutionの `CMakeLists.txt` が `CPPBUILD_FORMAT` を宣言し、取り込む側が確認する）。
 - **リンク先リポジトリの前提**：CppBuildのSolutionを含み、その生成ファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`）をコミットしていること。`deps/` と `.cppbuild/output/` はコミットしない。
 - **制約**：パス指定（`link_solution`）でリンクしたSolutionの中のgitの記録はたどらない（gitでリンクしたSolutionの記録だけをたどる）。1つのリポジトリから使えるSolutionは1つ。サブモジュール・Git LFSは扱わない。`remove_git_source` は記録だけを消し、cloneは削除しない。
+
+
+# CppBuildを組み込むプログラム向けの機能（2026-10-13追加）
+
+CppBuildを組み込んで使うプログラムが、ファイルの置き方・例外の文言・値の検査をCppBuildから写さずに済むようにする。
+
+```python
+import cppbuild
+from cppbuild import (AlreadyRegisteredError, FileKind, InvalidValueError, NoMainProjectError,
+                      NotRegisteredError, ProjectType, SolutionBuildSettings)
+
+# 設定の変更とupdate()をひとまとまりにする。ブロックを抜けるとupdate()を実行し、
+# ブロックの例外かupdate()の失敗で、ブロック内で書いた管理ファイル・生成ファイルを元に戻す
+with solution.transaction() as change:
+    app.settings.link_package(package)
+    app.settings.set_compile_options(["/W4"])
+if not change.success:
+    print(change.restored, change.restored_paths)       # 戻したか、戻したファイル
+    print(change.update.processes[0].output)            # 失敗したCMakeの出力
+
+# 何も変わっていなければ、update()・build()等はCMakeを実行しない（0.02〜0.03秒程度）
+report = solution.update()
+report.processes[0].skipped                              # Trueなら構成を省いた
+
+# 例外を種類で見分ける（どれも SettingsError の子。NotRegisteredError は KeyError でもある）
+try:
+    app.settings.link_solution(path, ProjectType.STATIC_LIBRARY)
+except AlreadyRegisteredError as e:                      # e.kind == "dependency"、e.name は既存のリンクの dependency_id
+    ...
+except NoMainProjectError as e:                          # e.solution、e.project_type（None なら主Projectがない）
+    ...
+except InvalidValueError as e:                           # e.field、e.value、e.allowed（決まった値の一覧か None）
+    ...
+
+# 受け付ける値
+cppbuild.CPP_STANDARDS, cppbuild.CONFIGURATIONS, cppbuild.ARCHITECTURES, cppbuild.GENERATORS
+cppbuild.MSVC_RUNTIMES, cppbuild.LIBRARY_TYPES, cppbuild.SWITCHABLE_TYPES
+
+# ファイルの種類（Solutionのルート基準の相対パスか絶対パス）
+solution.file_kind("App/CMakeLists.txt")   # FileKind.GENERATED
+solution.file_kind(".cppbuild/project.json")  # FileKind.MANAGED
+solution.file_kind("App/src/main.cpp")     # None（CppBuildのファイルではない）
+
+# 静的・共有を切り替えられるライブラリを、リンク先も含めてすべて共有ライブラリにする（保存しない）
+solution.set_build_settings(SolutionBuildSettings(shared_libraries=True))
+
+# gitのリンク先を、全Projectのリンクと記録ごと外す（cloneは残す）
+report = solution.unlink_git_source("STL")  # report.unlinked: ((Project名, dependency_id), ...)
+```
+
+- **トランザクション**：`with solution.transaction() as change:` の中で設定を変える。ブロックを抜けると `solution.update()` を実行し、結果を `change.update` に入れる。ブロックが例外を出したとき（例外はそのまま伝わる）、`update()` が例外を出したとき、`update()` が失敗したときは、ブロック内でCppBuildが書いた管理ファイル（`.cppbuild/` の設定・種類別設定・テンプレート）と生成ファイル（`CMakeLists.txt`・`CppBuildTopLevel.cmake`）を書く前の内容に戻し、新しく作ったファイル・空のディレクトリを消し、設定を読み直す。`link_git` が新しくしたcloneも消す。`change.success` は更新が成功して戻していないとき真。
+  - 戻さないもの：ソースファイル（`add_file` 等）、ビルドツリー・成果物。ビルドツリーは失敗した構成のままだが、次の操作で構成し直す。
+  - 途中で別のプロセスが書き換えたファイルは戻さず、`change.conflicts` に入れる。トランザクションはロックを保持し続けないため、同時に変更すること自体は防がない。
+  - `move_project` はファイルを移動するため、トランザクション内ではエラー。入れ子もエラー。
+- **構成の省略**：前回の構成が成功していて、CppBuildが渡すもの（生成ファイル・初期キャッシュ・構成のコマンド・集めたソースの一覧・ツールの設定）が同じで、CMakeが前回読んだファイル（File APIの `cmakeFiles-v1`）がどれも変わっていなければ、CMakeを実行しない。結果の `ProcessReport.skipped` が真になる。ソースの追加・削除、設定の変更、生成ファイルの手直し、ビルドツリーの削除、パッケージの設定ファイルの更新では構成し直す。記録はビルドツリーの `cppbuild-configured.json`。
+- **例外の種類**：`AlreadyRegisteredError`（`kind`：`project`・`dependency`・`file_template`）、`NotRegisteredError`（`kind`：`project`・`dependency`・`file_template`・`git_source`。従来 `KeyError` だった箇所の互換のため `KeyError` の子でもある）、`NoMainProjectError`、`InvalidValueError`（構成・アーキテクチャ・C++の規格・生成器・MSVCランタイム・警告レベル・名前・OSのライブラリ名・CMakeのターゲット名とパッケージ名・リンク形式）。パスがない場合は従来どおり `FileNotFoundError`。ほかの検査は従来どおり `SettingsError` で、文言で区別する。
+- **ファイルの種類**：`GENERATED`（管理ファイルから `update()` が作る。CppBuildなしでビルドできるようコミットする）、`MANAGED`（`.cppbuild/` の中の設定。コミットする）、`OUTPUT`（ビルドツリー・成果物・ロック。コミットしない）、`FETCHED`（`git_sources` のclone。記録から取得し直せる。コミットしない）。CppBuildの印のない `CMakeLists.txt` は `None`。手で置いたリンク先Solutionの中のファイルも同じ規則で分類する（そのリポジトリのファイルとして扱うかは利用側で決める）。
+- **すべて共有**：`SolutionBuildSettings.shared_libraries=True` は、最上位の操作で、静的・共有のどちらかになるライブラリ（リンク先Solutionを含む）を共有ライブラリにする。`project_types` と、そのProject自身の `ProjectBuildSettings.project_type` の指定が優先する。INTERFACE_LIBRARYのままのものは変えない。dllexportのないライブラリは `set_windows_export_all_symbols()` が必要。
+- **リンク先単位の解除**：`unlink_git_source(name)` は、このSolutionの全Projectから、そのcloneの中のProjectへのリンクを外し、`git_sources` の記録を消す。1回の保存で行う。cloneは残す（`remove_git_source` と同じ）。
+- **Solutionの外のファイルからのテンプレート**：`create_file_template(name, source_file)` の `source_file` には絶対パスを渡せる（従来から可能）。素材はSolutionの `.cppbuild/templates/` に写す。

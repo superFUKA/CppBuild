@@ -16,13 +16,12 @@ import shutil
 import subprocess
 import sys
 
-from .models import CMakeSettings, SettingsError
+from .models import ARCHITECTURES, CMakeSettings, InvalidValueError, SettingsError
 from . import storage, tooling
 
 VISUAL_STUDIO = {"Visual Studio 17 2022": ("vs2022", ".sln"), "Visual Studio 18 2026": ("vs2026", ".slnx")}
 NINJA_MULTI_CONFIG = "Ninja Multi-Config"
 SUPPORTED = (*VISUAL_STUDIO, NINJA_MULTI_CONFIG)
-ARCHITECTURES = ("x64", "Win32", "ARM64")
 _VCVARS = {"x64": "x64", "Win32": "x86", "ARM64": "arm64"}
 _OSX = {"x64": "x86_64", "ARM64": "arm64"}
 _VSCMD = {"x64": "x64", "x86": "Win32", "arm64": "ARM64"}
@@ -75,8 +74,9 @@ def validate(value):
     _tool_name(value.cxx_compiler, "cxx_compiler")
     generator = value.generator or default_generator()
     if generator not in SUPPORTED:
-        raise SettingsError(f"Generator {generator!r} is not supported by CppBuild "
-                            f"(supported: {', '.join(SUPPORTED)}); CMake may still provide it")
+        raise InvalidValueError(f"Generator {generator!r} is not supported by CppBuild "
+                                f"(supported: {', '.join(SUPPORTED)}); CMake may still provide it",
+                                field="generator", value=generator, allowed=SUPPORTED)
     if value.toolchain_file is not None and not Path(value.toolchain_file).is_absolute():
         raise SettingsError("toolchain_file must be an absolute path")
     if generator in VISUAL_STUDIO and (value.c_compiler or value.cxx_compiler):

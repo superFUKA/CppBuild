@@ -4,6 +4,7 @@ A failed publish can leave unreferenced type files, never a half-updated manifes
 Concurrent writers cooperate using an exclusive lock; stale locks are diagnosed.
 """
 from contextlib import ExitStack, contextmanager
+import contextvars
 import hashlib
 import json
 import os
@@ -31,8 +32,69 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+# Journal of an open Solution.transaction() ------------------------------------------
+
+class Journal:
+    """Management and generated files written while a transaction is open: their previous
+    bytes (None: missing), the bytes last written, and the directories created for them."""
+
+    def __init__(self):
+        self.previous, self.latest, self.directories, self.clones = {}, {}, [], []
+
+
+_journal = contextvars.ContextVar("cppbuild_journal", default=None)
+
+
+def journal():
+    return _journal.get()
+
+
+def begin(value):
+    return _journal.set(value)
+
+
+def end(token):
+    _journal.reset(token)
+
+
+def before_write(path):
+    """Record path's bytes before its first change in the open transaction, if it is restorable."""
+    current = _journal.get()
+    if current is None:
+        return None
+    path = Path(path).resolve()
+    from .file_kinds import restorable
+    if not restorable(path):
+        return None
+    if path not in current.previous:
+        current.previous[path] = path.read_bytes() if path.is_file() else None
+        if current.previous[path] is None:
+            before_directory(path.parent)
+    return path
+
+
+def before_directory(directory):
+    """Record the outermost directory about to be created, for removal when it stays empty."""
+    current = _journal.get()
+    if current is None:
+        return
+    missing = Path(directory).resolve()
+    if missing.exists():
+        return
+    while not missing.parent.exists() and missing.parent != missing:
+        missing = missing.parent
+    current.directories.append(missing)
+
+
+def after_write(path, data):
+    current = _journal.get()
+    if current is not None and path is not None:
+        current.latest[path] = data
+
+
 def atomic_write(path, data):
     path = Path(path)
+    recorded = before_write(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
     try:
@@ -43,6 +105,7 @@ def atomic_write(path, data):
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+    after_write(recorded, data)
 
 
 def rename_no_replace(source, destination):
@@ -114,6 +177,7 @@ def publish_documents(documents):
 @contextmanager
 def write_lock(directory):
     directory = Path(directory)
+    before_directory(directory)
     directory.mkdir(parents=True, exist_ok=True)
     lock = directory / ".write.lock"
     try:

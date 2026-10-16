@@ -6,7 +6,7 @@ from pathlib import Path
 import uuid
 
 from . import dependencies, paths, storage
-from .models import ChangeReport, Dependency, ProjectReference, SettingsConflictError, SettingsError
+from .models import ChangeReport, Dependency, NoMainProjectError, ProjectReference, SettingsConflictError, SettingsError
 
 
 def validate(values, *, legacy=False):
@@ -157,16 +157,23 @@ def load(solution, values, projects, loaded, solution_revision, *, migrate):
 
 
 def save_project(settings, values, *, additions=(), git_source=None):
-    solution = settings.owner.solution
+    def change(data, parent):
+        if git_source is not None:
+            name, record = git_source
+            parent.git_sources[name] = record
+        data[settings.owner] = deepcopy(values)
+        for reference in additions:
+            _register(parent, reference)
+    return save_projects(settings.owner.solution, change)
+
+
+def save_projects(solution, change):
+    """Save change(data, parent) of every Project's settings and the Solution's in one publish;
+    references no Project uses any more are dropped."""
     parent = solution.settings.get()
-    if git_source is not None:
-        name, record = git_source
-        parent.git_sources[name] = record
     originals = {p: p.settings.get() for p in solution.projects()}
     data = {p: deepcopy(d) for p, d in originals.items()}
-    data[settings.owner] = deepcopy(values)
-    for reference in additions:
-        _register(parent, reference)
+    change(data, parent)
     normalize(solution, parent, data)
     revisions = {p: dict(p.settings._revision) for p in data}
     report = _publish(solution, parent, data, originals, revisions,
@@ -188,18 +195,18 @@ def link(settings, config_directory, link_type, *, git_source=None):
     other = _identity_solution(config)
     project_name = other.settings._data.main_project
     if project_name is None:
-        raise SettingsError("External Solution needs a main Project")
+        raise NoMainProjectError("External Solution needs a main Project", solution=other.root)
     project = other.get_project(project_name)
     if link_type not in project.settings._data.types:
-        raise SettingsError("External Solution needs a main Project of the requested type")
+        raise NoMainProjectError("External Solution needs a main Project of the requested type",
+                                 solution=other.root, project_type=link_type)
     project_guid = project.settings._data.guid
     if other.root == settings.owner.solution.root:
         raise SettingsError("Use link_project for the same Solution")
     dependency = Dependency(project_guid, link_type)
     dependencies.validate(settings.owner, dependency)
     values = settings.get()
-    if dependency in values.dependencies.values():
-        raise SettingsError("Dependency is already registered")
+    dependencies.registered(values, dependency)
     key = uuid.uuid4().hex
     values.dependencies[key] = dependency
     save_project(settings, values, additions=(ProjectReference(project_guid, paths.relative(settings.owner.solution.root, config)),),

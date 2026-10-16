@@ -136,6 +136,9 @@ class GitSourceTests(unittest.TestCase):
         self.assertIn(core_first, str(raised.exception))
         self.assertIn(core_second, str(raised.exception))
         self.assertEqual(self.app_solution.settings.get(), before)
+        # The failed link removes what it cloned; the places linked before stay.
+        self.assertFalse((self.app_solution.root / "deps/Net").exists())
+        self.assertTrue((self.app_solution.root / "deps/Mono").is_dir())
         # Recording it at the top level chooses; the clone already there is kept as it is.
         self.app_solution.set_git_source(url(self.root / "repos/Mono"), core_second, "libs/Core/.cppbuild")
         self.app.settings.link_git(url(self.root / "repos/Net"), link_type=T.STATIC_LIBRARY)
@@ -145,6 +148,28 @@ class GitSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(SettingsError, "unlink"):
             self.app_solution.remove_git_source("STL")
 
+    def test_unlink_a_git_source_from_every_project(self):
+        stl, _ = library(self.root / "repos/STL", "STL", 1)
+        publish(stl, self.root / "repos/STL")
+        tool = self.app_solution.add_project("Tool", "Tool", T.EXECUTABLE)
+        tool.add_file("src/main.cpp", content="int main() { return 0; }\n", auto_update=False)
+        local = self.app_solution.add_project("Local", "Local", T.STATIC_LIBRARY)
+        local.add_file("src/local.cpp", content="int local() { return 0; }\n", auto_update=False)
+        first = self.app.settings.link_git(url(self.root / "repos/STL"), link_type=T.STATIC_LIBRARY)
+        second = tool.settings.link_git(url(self.root / "repos/STL"), link_type=T.STATIC_LIBRARY)
+        kept = tool.settings.link_project(local, T.STATIC_LIBRARY)
+        report = self.app_solution.unlink_git_source("STL")
+        self.assertEqual(set(report.unlinked), {("App", first.dependency_id), ("Tool", second.dependency_id)})
+        values = self.app_solution.settings.get()
+        self.assertEqual((values.git_sources, values.references), ({}, {}))
+        self.assertEqual(self.app.settings.get().dependencies, {})
+        self.assertEqual(list(tool.settings.get().dependencies), [kept.dependency_id])
+        # The clone stays, as with remove_git_source, and the record can be linked again.
+        self.assertTrue((self.app_solution.root / "deps/STL").is_dir())
+        self.app.settings.link_git(url(self.root / "repos/STL"), link_type=T.STATIC_LIBRARY)
+        with self.assertRaises(KeyError):
+            self.app_solution.unlink_git_source("Missing")
+
     def test_failures_and_existing_places(self):
         with self.assertRaisesRegex(SettingsError, "credentials"):
             self.app.settings.link_git("https://user:secret@example.invalid/STL.git", link_type=T.STATIC_LIBRARY)
@@ -153,6 +178,13 @@ class GitSourceTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("deps/STL", message)
         self.assertIn("git clone", message)
+        self.assertEqual(self.app_solution.settings.get().git_sources, {})
+        # A clone the link cannot use is removed, so linking again later is not taken for someone's own copy.
+        Solution.create(self.root / "repos/Empty", "Empty")
+        commit(self.root / "repos/Empty")
+        with self.assertRaisesRegex(SettingsError, "main Project"):
+            self.app.settings.link_git(url(self.root / "repos/Empty"), link_type=T.STATIC_LIBRARY)
+        self.assertFalse((self.app_solution.root / "deps/Empty").exists())
         self.assertEqual(self.app_solution.settings.get().git_sources, {})
         # Someone's own copy in the place is used and never switched.
         stl, _ = library(self.root / "repos/STL", "STL", 1)

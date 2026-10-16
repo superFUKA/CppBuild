@@ -11,6 +11,8 @@ from .models import (
     BuildEvents, BuildOption, ChangeReport, INHERIT, ProjectBuildSettings, ProjectSettingsData, ProjectType,
     SettingsConflictError, SettingsError, SolutionBuildSettings, SolutionSettingsData,
     TypeSettingsData, Dependency, LinkReport, SolutionFolderSettings, ProjectReference, LIBRARY_TYPES, GitSource,
+    AlreadyRegisteredError, InvalidValueError, NotRegisteredError, ARCHITECTURES, CONFIGURATIONS, CPP_STANDARDS,
+    MSVC_RUNTIMES, SWITCHABLE_TYPES,
 )
 from . import storage
 from . import dependencies as dependency_data
@@ -20,7 +22,7 @@ from . import tooling, generators
 
 def _name(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", value):
-        raise SettingsError("Name must match [A-Za-z_][A-Za-z0-9_-]*")
+        raise InvalidValueError("Name must match [A-Za-z_][A-Za-z0-9_-]*", field="name", value=value)
 
 
 def _strings(values):
@@ -47,8 +49,6 @@ def _entry_point(values):
         raise SettingsError(f"{entry or 'main'} is the entry of a {'GUI' if expected else 'console'} program")
 
 
-CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
-MSVC_RUNTIMES = ("dll", "static")
 
 
 def _cmake_text(value, what):
@@ -71,7 +71,8 @@ def _build_options(items, what, *, definitions=False):
         if item.compiler is not None and (not isinstance(item.compiler, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", item.compiler)):
             raise SettingsError(f"compiler is a CMake compiler id like MSVC, GNU or Clang: {item.compiler!r}")
         if item.configuration is not None and item.configuration not in CONFIGURATIONS:
-            raise SettingsError(f"configuration must be one of {', '.join(CONFIGURATIONS)}: {item.configuration!r}")
+            raise InvalidValueError(f"configuration must be one of {', '.join(CONFIGURATIONS)}: {item.configuration!r}",
+                                    field="configuration", value=item.configuration, allowed=CONFIGURATIONS)
 
 
 def _as_build_options(items):
@@ -135,9 +136,8 @@ def _build_settings(value, seen=None):
             raise SettingsError("Solution CMake settings cannot inherit")
     else:
         generators.validate(value.cmake)
-    for key, allowed in (("configuration", {"Debug", "Release", "RelWithDebInfo", "MinSizeRel"}),
-                         ("architecture", {None, "x64", "Win32", "ARM64"}),
-                         ("cpp_standard", {17, 20, 23})):
+    for key, allowed in (("configuration", CONFIGURATIONS), ("architecture", (None, *ARCHITECTURES)),
+                         ("cpp_standard", CPP_STANDARDS)):
         item = getattr(value, key)
         if item is not INHERIT:
             try:
@@ -145,11 +145,11 @@ def _build_settings(value, seen=None):
             except TypeError:
                 valid = False
             if not valid:
-                raise SettingsError(f"Unsupported {key}: {item!r}")
+                raise InvalidValueError(f"Unsupported {key}: {item!r}", field=key, value=item, allowed=allowed)
     for key in ("parallel", "test_parallel") if isinstance(value, ProjectBuildSettings) else ("parallel", "run_parallel"):
         if type(getattr(value, key)) is not int or getattr(value, key) < 1:
             raise SettingsError(f"{key} must be positive")
-    for key in ("run_wait",) if isinstance(value, ProjectBuildSettings) else ("run_wait", "run_continue_on_failure", "test_continue_on_failure", "fetch_git"):
+    for key in ("run_wait",) if isinstance(value, ProjectBuildSettings) else ("run_wait", "run_continue_on_failure", "test_continue_on_failure", "fetch_git", "shared_libraries"):
         if type(getattr(value, key)) is not bool:
             raise SettingsError(f"{key} must be boolean")
     if isinstance(value, ProjectBuildSettings):
@@ -173,8 +173,9 @@ def _build_settings(value, seen=None):
             raise SettingsError("project_types must be a mapping")
         for project_guid, kind in value.project_types.items():
             dependency_data.guid(project_guid)
-            if not isinstance(kind, ProjectType) or kind not in {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}:
-                raise SettingsError("project_types switches only between STATIC_LIBRARY and SHARED_LIBRARY")
+            if not isinstance(kind, ProjectType) or kind not in SWITCHABLE_TYPES:
+                raise InvalidValueError("project_types switches only between STATIC_LIBRARY and SHARED_LIBRARY",
+                                        field="project_types", value=kind, allowed=sorted(SWITCHABLE_TYPES))
         if not isinstance(value.external_build_settings, dict):
             raise SettingsError("external_build_settings must be a mapping")
         for directory, data in value.external_build_settings.items():
@@ -258,14 +259,16 @@ class ProjectSettings(_Settings):
         _strings(values.system_libraries)
         for library in values.system_libraries:
             if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", library):
-                raise SettingsError(f"A system library is a plain name like ws2_32 or pthread: {library!r}")
+                raise InvalidValueError(f"A system library is a plain name like ws2_32 or pthread: {library!r}",
+                                        field="system_libraries", value=library)
         if len(set(values.system_libraries)) != len(values.system_libraries):
             raise SettingsError("Duplicate system library")
         _build_options(values.compile_options, "compile_options")
         _build_options(values.link_options, "link_options")
         _build_options(values.conditional_definitions, "conditional_definitions", definitions=True)
         if values.warning_level is not None and (type(values.warning_level) is not int or not 0 <= values.warning_level <= 4):
-            raise SettingsError("warning_level must be 0-4 or None")
+            raise InvalidValueError("warning_level must be 0-4 or None", field="warning_level",
+                                    value=values.warning_level, allowed=(None, 0, 1, 2, 3, 4))
         if type(values.warnings_as_errors) is not bool:
             raise SettingsError("warnings_as_errors must be boolean")
         _build_events(values.build_events)
@@ -426,11 +429,11 @@ class ProjectSettings(_Settings):
         if other_project.solution is not self.owner.solution:
             raise SettingsError("Use link_solution for external Solutions")
         if not isinstance(link_type, ProjectType) or link_type not in other_project.settings.get().types:
-            raise SettingsError("Dependency does not support the requested type")
+            raise InvalidValueError("Dependency does not support the requested type", field="link_type", value=link_type,
+                                    allowed=sorted(other_project.settings.get().types))
         values = self.get()
         dependency = Dependency(other_project.settings.get().guid, link_type)
-        if dependency in values.dependencies.values():
-            raise SettingsError("Dependency is already registered")
+        dependency_data.registered(values, dependency)
         dependency_id = uuid.uuid4().hex
         values.dependencies[dependency_id] = dependency
         self.save(values)
@@ -438,14 +441,15 @@ class ProjectSettings(_Settings):
 
     def unlink(self, dependency_id):
         values = self.get()
+        if dependency_id not in values.dependencies:
+            raise NotRegisteredError(f"Unknown dependency id: {dependency_id}", kind="dependency", name=dependency_id)
         del values.dependencies[dependency_id]
         return self.save(values)
 
     def _link(self, value):
         values = self.get()
         dependency_data.validate(self.owner, value)
-        if value in values.dependencies.values():
-            raise SettingsError("Dependency is already registered")
+        dependency_data.registered(values, value)
         key = uuid.uuid4().hex
         values.dependencies[key] = deepcopy(value)
         self.save(values)
@@ -468,10 +472,13 @@ class ProjectSettings(_Settings):
         created = []
         try:
             name, record, config = prepare_link(self.owner.solution, url, revision, solution_path, created)
-            return link(self, config, link_type, git_source=(name, record))
+            report = link(self, config, link_type, git_source=(name, record))
         except BaseException:
             discard(created)
             raise
+        if storage.journal() is not None:
+            storage.journal().clones.extend(created)  # removed again if the transaction is undone
+        return report
 
     def link_package(self, package):
         from .models import CMakePackage
@@ -605,7 +612,8 @@ class SolutionSettings(_Settings):
         from .git_sources import validate as validate_git_sources
         validate_git_sources(values)
         if values.msvc_runtime not in MSVC_RUNTIMES:
-            raise SettingsError(f"msvc_runtime must be one of {', '.join(MSVC_RUNTIMES)}")
+            raise InvalidValueError(f"msvc_runtime must be one of {', '.join(MSVC_RUNTIMES)}", field="msvc_runtime",
+                                    value=values.msvc_runtime, allowed=MSVC_RUNTIMES)
         if not isinstance(values.file_templates, dict):
             raise SettingsError("file_templates must be a mapping")
         from .templates import material_path
@@ -722,6 +730,8 @@ class SolutionSettings(_Settings):
 
     def remove_file_template(self, name):
         values = self.get()
+        if name not in values.file_templates:
+            raise NotRegisteredError(f"Unknown file template: {name}", kind="file_template", name=name)
         del values.file_templates[name]
         return self.save(values)
 
@@ -751,19 +761,25 @@ class Project:
             raise SettingsError("Selected type is not supported by the Project")
         self._build_settings = deepcopy(values)
 
-    def _resolved_build_settings(self, requested_type=None, project_types=None):
-        """requested_type is the saved link type; project_types the operation's GUID overrides."""
+    def _resolved_build_settings(self, requested_type=None, project_types=None, shared_libraries=None):
+        """requested_type is the saved link type; project_types the operation's GUID overrides and
+        shared_libraries its SolutionBuildSettings.shared_libraries (None: this Solution's)."""
         self._check_active()
         values = deepcopy(self._build_settings)
         overrides = self.solution._build_settings.project_types if project_types is None else project_types
+        if shared_libraries is None:
+            shared_libraries = self.solution._build_settings.shared_libraries
         forced = overrides.get(self.settings._data.guid)
         if forced is not None and forced not in self.settings._data.types:
             raise SettingsError(f"project_types selects a type {self.name} does not have")
-        linkable = {ProjectType.STATIC_LIBRARY, ProjectType.SHARED_LIBRARY}
+        linkable = SWITCHABLE_TYPES
         # One selection per Project, as the generated <Solution>_<Project>_TYPE cache variable:
-        # the operation's override, then the Project's own selection. It is the Project's own
-        # type, and a static/shared selection also switches every static/shared link.
+        # the operation's override, then the Project's own selection, then shared_libraries for a
+        # static/shared library. It is the Project's own type, and a static/shared selection also
+        # switches every static/shared link.
         chosen = forced or values.project_type
+        if chosen is None and shared_libraries and (requested_type or self.settings._data.initial_type) in linkable:
+            chosen = ProjectType.SHARED_LIBRARY
         if requested_type is not None:
             values.project_type = chosen if chosen in linkable and requested_type in linkable else requested_type
         else:
@@ -918,6 +934,8 @@ class Solution:
         return instance
 
     def get_project(self, name):
+        if name not in self._projects:
+            raise NotRegisteredError(f"Unknown Project: {name}", kind="project", name=name)
         return self._projects[name]
 
     def projects(self):
@@ -926,6 +944,20 @@ class Solution:
     def create_file_template(self, name, source_file, *, replacements=None):
         from .templates import create_file
         return create_file(self, name, source_file, replacements)
+
+    def transaction(self):
+        """A context manager: change settings in the block; leaving it runs update(). When the block
+        raises or the update fails, every management and generated file written in the block is
+        put back and git clones it made are removed (TransactionReport). Sources, build trees and
+        artifacts are not restored; the next operation configures the tree again."""
+        from .transactions import transaction
+        return transaction(self)
+
+    def file_kind(self, path):
+        """FileKind of path (relative to the Solution root, or absolute), or None for files CppBuild
+        does not own, such as sources. Decided from the path and the files on disk."""
+        from .file_kinds import kind
+        return kind(self, path)
 
     def on(self, event, callback):
         return self._events.on(event, callback)
@@ -948,7 +980,7 @@ class Solution:
         root = storage.contained(self.root, str(directory))
         values = self.settings.get()
         if name in values.projects:
-            raise SettingsError(f"Duplicate Project: {name}")
+            raise AlreadyRegisteredError(f"Duplicate Project: {name}", kind="project", name=name)
         values.projects[name] = root.relative_to(self.root).as_posix()
         if len(values.projects) == 1:
             values.main_project = name
@@ -978,6 +1010,7 @@ class Solution:
 
     def remove_project(self, name):
         values = self.settings.get()
+        self.get_project(name)
         if name == values.main_project:
             raise SettingsError("Change main_project before removing it")
         for project in self.projects():
@@ -1015,6 +1048,15 @@ class Solution:
         from .git_sources import set_source
         return set_source(self, url, revision, solution_path)
 
+    def unlink_git_source(self, name):
+        """Unlink every Project of this Solution from the Projects of the git source, and forget its
+        record, in one save (UnlinkReport). The clone is kept."""
+        self.settings.reload()
+        for project in self.projects():
+            project.settings.reload()
+        from .git_sources import unlink_source
+        return unlink_source(self, name)
+
     def remove_git_source(self, name):
         """Forget a record no Project links any more; its clone is kept."""
         from .git_sources import remove_source
@@ -1028,6 +1070,8 @@ class Solution:
             return fetch(self)
 
     def move_project(self, name, destination, *, auto_update=True):
+        if storage.journal() is not None:
+            raise SettingsError("move_project moves the Project's files, which a transaction cannot undo")
         from .relocation import move_project
         return move_project(self, name, destination, auto_update=auto_update)
 
@@ -1037,5 +1081,5 @@ class Solution:
         _build_settings(values)
         for name in [*(values.build_projects or []), *values.run_projects, *(values.test_projects or [])]:
             if name not in self._projects:
-                raise SettingsError(f"Unknown Project: {name}")
+                raise NotRegisteredError(f"Unknown Project: {name}", kind="project", name=name)
         self._build_settings = deepcopy(values)

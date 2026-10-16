@@ -182,7 +182,8 @@ class Plan:
     # Settings ------------------------------------------------------------------
 
     def self_settings(self, project):
-        return project._resolved_build_settings(None, self.solution._build_settings.project_types)
+        return project._resolved_build_settings(None, self.solution._build_settings.project_types,
+                                                self.solution._build_settings.shared_libraries)
 
     def cache_script(self, toolchain):
         """An initial cache (cmake -C) holding every non-saved value, set explicitly on each configure."""
@@ -198,6 +199,9 @@ class Plan:
             own = self.self_settings(project)
             if project.settings._data.initial_type not in {ProjectType.EXECUTABLE, ProjectType.TEST}:
                 forced = settings.project_types.get(project.settings._data.guid) or project._build_settings.project_type
+                if forced is None and settings.shared_libraries and any(
+                        n.project is project and n.settings.project_type == ProjectType.SHARED_LIBRARY for n in self.nodes):
+                    forced = ProjectType.SHARED_LIBRARY
                 values.append((cmake_files.type_variable(project), "STRING", cmake_files.KIND[forced] if forced else ""))
             values.append((cmake_files.standard_variable(project), "STRING", str(own.cpp_standard)))
             directory = ""

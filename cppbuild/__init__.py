@@ -15,8 +15,12 @@ from .models import (
     TypeSettingsData, BuildOption, BuildEvents, Dependency, LinkReport, CMakePackage, CMakeSource, ImportedLibrary, ProjectReference,
     MissingDependency, MissingDependenciesError,
     GitSource, FetchFailure, GitFetchError, GitSourceConflictError,
+    InvalidValueError, AlreadyRegisteredError, NotRegisteredError, NoMainProjectError,
+    CONFIGURATIONS, ARCHITECTURES, CPP_STANDARDS, MSVC_RUNTIMES, LIBRARY_TYPES, SWITCHABLE_TYPES, FileKind,
 )
-from .git_sources import FetchReport, GitSourceStatus
+from .git_sources import FetchReport, GitSourceStatus, UnlinkReport
+from .transactions import TransactionReport
+from .generators import SUPPORTED as GENERATORS
 
 __all__ = [
     "SolutionFolderSettings", "Project", "Solution", "ProjectType", "ProjectSettingsData", "SolutionSettingsData",
@@ -30,4 +34,7 @@ __all__ = [
     "EnvironmentReport", "EnvironmentItem", "ToolSettings", "ProjectInfo", "SolutionInfo",
     "CMakeSettings", "GeneratorInfo", "CompilerInfo", "MissingDependency", "MissingDependenciesError",
     "GitSource", "GitSourceStatus", "FetchReport", "FetchFailure", "GitFetchError", "GitSourceConflictError",
+    "InvalidValueError", "AlreadyRegisteredError", "NotRegisteredError", "NoMainProjectError",
+    "CONFIGURATIONS", "ARCHITECTURES", "CPP_STANDARDS", "MSVC_RUNTIMES", "LIBRARY_TYPES", "SWITCHABLE_TYPES", "GENERATORS",
+    "FileKind", "TransactionReport", "UnlinkReport",
 ]
