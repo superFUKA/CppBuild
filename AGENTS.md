@@ -2,7 +2,7 @@
 
 ## 最新の追加（2026-10-16）
 
-- **詳細ログ（未コミット）**：`cppbuild.configure_logging(LogSettings(level=..., file=..., format="text"|"json"))` または環境変数 `CPPBUILD_LOG`（`CPPBUILD_LOG_FILE`・`CPPBUILD_LOG_FORMAT`）で有効にする。既定は無効、保存しない。レベルは `ERROR`〜`TRACE`。公開APIの呼び出し・引数・戻り値・例外、全コマンドとその出力・環境変数、ファイルの書き込み・削除、ロック、イベント、構成を省いた理由などを記録する。全285件成功（3生成器の実ビルド、skipなし）、TRACEで記録しながらの全件も成功。利用シナリオは未実行。作業前から2026-10-13の組み込み向けAPIが未コミットで残っている。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「詳細ログ」。
+- **詳細ログ（`e359850` でコミット済み）**：`cppbuild.configure_logging(LogSettings(level=..., file=..., format="text"|"json"))` または環境変数 `CPPBUILD_LOG`（`CPPBUILD_LOG_FILE`・`CPPBUILD_LOG_FORMAT`）で有効にする。既定は無効、保存しない。レベルは `ERROR`〜`TRACE`。公開APIの呼び出し・引数・戻り値・例外、全コマンドとその出力・環境変数、ファイルの書き込み・削除、ロック、イベント、構成を省いた理由などを記録する。全285件成功（3生成器の実ビルド、skipなし）、TRACEで記録しながらの全件も成功。利用シナリオは未実行。作業前から残っていた2026-10-13の組み込み向けAPIは `cfa12bc` でコミット済み。詳細は[実装記録](deliverables/IMPLEMENTATION_STATUS.md)冒頭、使い方は[利用手順](deliverables/USAGE.md)の「詳細ログ」。
 
 ## 最新の追加（2026-10-13）
 
